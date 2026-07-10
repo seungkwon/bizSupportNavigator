@@ -1,0 +1,291 @@
+# 기업지원 종합 사이트 — 상세 실행 계획 (MVP)
+
+> 본 문서는 `plan.md`의 1차 구상을 바탕으로, 질의응답을 통해 확정한 기술/범위 결정을 반영한 상세 계획이다.
+
+## 0. 확정된 전제 조건 (Q&A 결과)
+
+| 항목 | 결정 |
+|---|---|
+| 기존 기능 처리 범위 | 기업 데모그래픽 추출/저장은 **이미 구현된 것으로 가정**하고 인터페이스(계약)만 정의. **정책 메타/첨부파일 수집은 본 프로젝트에서 기업마당 API로 신규 구현**(2절/3절 참고) |
+| 정책 수집 소스 | **기업마당(bizinfo.go.kr) Open API**로 정책 메타정보 + 첨부파일 목록 수집. 첨부파일 중 실제 **공고문 1개는 LLM이 파일명을 근거로 추론하여 선택** 후 다운로드 |
+| DB 스택 | **PostgreSQL**(정규화된 관계형 데이터: 기업/정책 메타, 첨부파일 정보) + **Chroma**(벡터 DB, RAG 임베딩 검색) + **Neo4j**(그래프 DB, GraphRAG) |
+| 기존 시스템 데이터 위치 | 기업 데모그래픽은 **이미 PostgreSQL에 저장되어 있다고 가정**. 정책 메타/첨부파일 정보는 본 프로젝트의 수집 파이프라인이 직접 PostgreSQL에 적재 |
+| HWP 파싱 | **이미 구현된 예제(기존 구현체)를 재사용**, langchain document loader 형태로 연동 — 본 프로젝트에서는 파싱 로직을 재구현하지 않고 **인터페이스(어댑터)만 정의** |
+| LLM 제공자 | **OpenAI API** (추론/생성: gpt-4o 계열) |
+| 임베딩 모델 | **Hugging Face `BAAI/bge-m3`** (OpenAI 임베딩 미사용) — 다국어/한국어 지원 모델, langchain `HuggingFaceEmbeddings` 래퍼로 연동 |
+| 첨부파일 형식 | PDF + **HWP/HWPX 포함** |
+| 배포 환경 | 미정, **로컬 개발 우선** → Docker Compose 기반 로컬 환경 구성 |
+| 인증/멀티테넌시 | 기업 계정 개념을 MVP 데이터 모델에 처음부터 포함(JWT 기반), 단 SSO/역할관리 등 고도화는 후순위 |
+| 매칭 결과 형태 | **적합도 점수(0~100) + 근거**(항목별 충족/미충족 사유) |
+| 문서 범위 | **MVP** — 핵심 파이프라인(수집→파싱→매칭→채팅)이 동작하는 것을 최우선 목표로 함 |
+
+---
+
+## 1. 시스템 아키텍처
+
+### 1.1 컴포넌트 개요
+
+```
+[기업마당 Open API]
+        │ (수집 배치/스케줄)
+        ▼
+[Bizinfo Collector] ── LLM 파일명 추론(공고문 선택) ── 다운로드
+        │
+        ▼
+[PostgreSQL] ◀────────────────────────────────────────────┐
+   - 정책 메타, 첨부파일 정보, 매칭결과 캐시                    │
+   - 기업 데모그래픽(가정, 기존 시스템 데이터)                   │
+        ▲                                                  │
+        │                                                  │
+[React SPA]                                                │
+   ├─ REST 호출 (조회/필터/기업정보) ──▶ [FastAPI REST] ──────┤
+   └─ WebSocket (채팅/서버 푸시) ──────▶ [FastAPI WebSocket]  │
+                                            │                │
+                                            ▼                │
+                                   [LangGraph 오케스트레이터]  │
+                                    ├─ 메타 필터 노드 (SQL) ───┘
+                                    ├─ RAG 검색 노드 (Chroma)
+                                    ├─ GraphRAG 추론 노드 (Neo4j)
+                                    ├─ LLM 판단/점수화 노드 (OpenAI)
+                                    └─ 추가질문 생성 노드 (정보 부족 시)
+                                            │
+                        ┌───────────────────┼───────────────────┐
+                        ▼                   ▼                   ▼
+                    [Chroma]             [Neo4j]      [기존 시스템 인터페이스]
+                - RAG 임베딩 검색   - 정책별 지식그래프    - 기업 데모그래픽 조회
+                  (chunk_id 참조)     (자격/제외요건 관계)    (가정, mock 어댑터)
+```
+
+### 1.2 DB 기술 선택 (확정)
+
+- **PostgreSQL**: 기업/정책의 정규화된 메타데이터(기업규모/지역/지원기간 등 구조화 필터)와 첨부파일 정보(경로/포맷/파싱상태)를 저장하는 **단일 진실 소스**. 기업 데모그래픽은 기존 시스템이 이미 저장해두었다고 가정하고, 정책 메타/첨부파일 정보는 본 프로젝트의 수집 파이프라인(3절)이 직접 적재한다.
+- **Chroma**: RAG 임베딩 검색 전담 벡터 DB. 원문/메타데이터는 PostgreSQL `document_chunks`에 저장하고, 벡터는 Chroma 컬렉션에 `chunk_id`를 키로 저장하여 상호 참조한다 (같은 값을 두 곳에 중복 저장하지 않음).
+- **Neo4j**: GraphRAG(신청자격/제외요건/기업 속성 간 관계 추론) 전담 그래프 DB. LangChain/LangGraph 생태계(`langchain-neo4j`)와의 통합 지원이 좋다.
+- 세 DB 모두 리포지토리/어댑터 계층으로 감싸, 향후 배포 환경이 정해지면 각각 관리형 서비스(RDS, Chroma 서버/관리형 벡터DB, Neo4j Aura 등)로 쉽게 이전 가능하도록 한다.
+
+---
+
+## 2. 기존 시스템과의 인터페이스 (가정 · 계약만 정의)
+
+기업 데모그래픽 기능은 실제 구현이 없다고 가정하되, 아래 인터페이스를 "이미 존재하는 것"으로 간주하고 개발한다. 실제 구현 시 이 계약에 맞춰 어댑터만 교체하면 되도록 설계한다. (정책 메타/첨부파일은 더 이상 가정 대상이 아니며, 3절의 수집 파이프라인이 본 프로젝트에서 직접 구현한다.)
+
+### 2.1 기업 데모그래픽 조회 (가정된 기존 기능)
+```
+GET /internal/companies/{company_id}/demographics
+→ {
+    "company_id": "string",
+    "company_name": "string",
+    "biz_registration_no": "string",
+    "region": "string",           // 지역 (필터링용)
+    "company_size": "string",     // 소상공인/중소/중견 등 (필터링용)
+    "industry_code": "string",
+    "established_date": "date",
+    "employee_count": "int",
+    "annual_revenue": "number",
+    "raw_business_plan": { ... }  // 원본 사업계획서 JSON
+  }
+```
+
+이 인터페이스는 신규 기능이 참조만 하며, 본 프로젝트에서는 **mock 어댑터**를 만들어 개발/테스트를 진행한다(4.5절 참고). 실제로는 이 데이터가 이미 PostgreSQL에 존재한다고 가정하므로, 어댑터는 최종적으로 해당 PostgreSQL 테이블을 직접 조회하는 리포지토리로 대체될 것을 전제로 설계한다.
+
+### 2.2 HWP/HWPX 파싱 (가정된 기존 구현)
+
+첨부파일 파싱 로직(특히 HWP)은 **이미 구현된 예제가 존재**하며, langchain document loader 형태로 감싸져 있다고 가정한다. 본 계획에서는 해당 구현을 재사용하는 것을 전제로, 아래와 같은 **인터페이스만 정의**하고 실제 파싱 로직은 구현하지 않는다.
+
+```python
+# 인터페이스 정의만 — 실제 구현은 기존 예제(langchain loader)를 연결
+from langchain_core.document_loaders import BaseLoader
+from langchain_core.documents import Document
+
+class AttachmentLoaderFactory:
+    """파일 포맷에 맞는 langchain Loader 인스턴스를 반환하는 어댑터.
+    HWP/HWPX 로더는 기존 구현체를 그대로 연결한다."""
+
+    def get_loader(self, file_path: str, file_format: str) -> BaseLoader:
+        ...  # pdf → PyPDFLoader 등, hwp/hwpx → 기존 구현 loader 연결
+
+    def load(self, file_path: str, file_format: str) -> list[Document]:
+        return self.get_loader(file_path, file_format).load()
+```
+
+- 실제 HWP loader 클래스/모듈 경로는 기존 구현 위치가 확인되는 대로 `get_loader`에 연결
+- 파싱 결과(`list[Document]`)는 4.1/4.2절의 청킹·임베딩 파이프라인 입력으로 그대로 사용
+
+---
+
+## 3. 정책 메타/첨부파일 수집 (기업마당 API 연동, 신규 구현)
+
+기업마당(bizinfo.go.kr) Open API를 통해 정책(정책자금/지원사업) 목록과 메타정보를 수집하고, 각 정책의 첨부파일 목록 중 실제 **공고문**(신청자격·제외요건이 담긴 문서) **1개**를 LLM으로 판별하여 다운로드한다. 이 파이프라인은 본 프로젝트에서 새로 구현하는 부분이다.
+
+- API 명세 참고: [기업마당 지원사업 정보 API](https://www.bizinfo.go.kr/apiDetail.do?id=bizinfoApi) — 실제 요청/응답 필드는 이 문서를 기준으로 확정
+- **인증키는 하드코딩하지 않고 `.env`(`BIZINFO_API_KEY` 등)로 관리**하며, 소스 저장소에는 커밋하지 않는다 (9절 로컬 개발 환경 참고)
+
+### 3.1 수집 파이프라인 개요
+
+1. `fetch_policy_list` — 기업마당 Open API 호출(페이지네이션/증분 수집: `updated_since` 등)로 정책 목록 + 메타(지원대상, 지역, 지원기간 등) + 첨부파일 목록(파일명, 다운로드 URL) 획득
+2. `select_announcement_file` — 첨부파일명 목록을 LLM에 전달하여 **공고문에 해당하는 파일 1개**를 선택 (신청서 양식, 별첨 서식, 개인정보 동의서 등 비공고문과 구분)
+3. `download_attachment` — 선택된 1개 파일만 다운로드하여 스토리지(로컬 파일시스템 → 추후 오브젝트 스토리지로 이전 가능하게 어댑터화)에 저장
+4. `persist_policy_meta` — 정책 메타 + 다운로드된 파일 경로를 PostgreSQL(`policies`, `policy_attachments`)에 저장
+5. 배치/스케줄 실행(예: 일 1회 또는 수동 트리거)을 전제로 하며, `updated_since` 기준 증분 수집으로 중복 처리를 최소화
+
+### 3.2 공고문 판별 로직 (LLM 파일명 추론)
+
+- **입력**: 한 정책의 첨부파일명 리스트 (예: `["2025년_OO지원사업_공고문.hwp", "신청서_양식.hwp", "개인정보_동의서.hwp"]`)
+- **1차 필터(규칙 기반)**: "공고", "공고문", "시행공고", "모집공고" 등 키워드 포함 파일과 "신청서", "서식", "동의서", "리플릿" 등 제외 키워드 파일을 우선 구분해 후보를 좁힘 (LLM 호출 비용 절감)
+- **2차 판단(LLM)**: 1차로 좁혀진 후보(또는 애매한 전체 목록)를 LLM에 전달, **structured output**으로 아래 형태의 응답을 받아 최종 1개 파일 확정
+  ```json
+  {"selected_filename": "2025년_OO지원사업_공고문.hwp", "reason": "‘공고문’ 키워드를 포함하고 신청서/서식 성격의 파일명이 아님"}
+  ```
+- **모호/저신뢰 처리**: 후보가 여러 개거나(동일 신뢰도 다중 매치) 전혀 매치되지 않는 경우, 자동 선택하지 않고 **수동 검수 큐**로 분기 (11절 리스크 참고)
+- 선택 결과(`is_announcement`, `selection_reason`)는 `policy_attachments`에 함께 저장하여 추후 오탐 검수·재학습 근거로 활용
+
+### 3.3 데이터 모델 (수집 관련)
+
+| 테이블 | 주요 컬럼 |
+|---|---|
+| `policies` | policy_id(PK), title, meta(JSONB: 기업규모/지역/지원기간 등), source(`bizinfo`), collected_at |
+| `policy_attachments` | id, policy_id(FK), file_name, download_url, is_announcement(bool), selection_reason, downloaded_path, format(pdf/hwp/hwpx), parse_status |
+
+---
+
+## 4. 핵심 매칭 파이프라인 설계
+
+### 4.1 첨부파일 파싱
+- **PDF**: langchain의 PDF loader(`PyPDFLoader` 등)로 텍스트+표 추출. 표 형태의 신청자격 요건이 많으므로 표 구조 보존에 신경 쓴다.
+- **HWP/HWPX**: 2.2절의 `AttachmentLoaderFactory`를 통해 **기존에 구현된 langchain loader**를 그대로 호출 (본 프로젝트에서 파싱 로직을 새로 구현하지 않음)
+- 파싱 대상 파일은 3절 수집 파이프라인이 다운로드한 `policy_attachments.downloaded_path`(공고문으로 선택된 1개 파일)
+- 파싱 신뢰도가 낮은 경우를 대비해 **파싱 실패/저품질 문서 큐**를 두어 수동 검수 경로로 분기 (기존 HWP loader의 실패 케이스 처리 정책은 해당 구현을 확인 후 반영)
+- 파싱 결과(`Document` 리스트)는 원문 텍스트 + 섹션 메타(제목, 페이지 등)를 갖는 `document_chunks` 테이블에 저장
+
+### 4.2 청킹 & 임베딩 (RAG)
+- 신청자격/제외요건/지원한도 등 의미 단위로 청킹 (고정 길이보다 섹션 기반 청킹 우선, 예: "1. 지원대상", "2. 제외대상" 헤더 기준 분리)
+- **Hugging Face `BAAI/bge-m3`** 임베딩 모델(langchain `HuggingFaceEmbeddings` 래퍼)로 벡터화 → **Chroma**에 저장, 원문/메타는 PostgreSQL `document_chunks`에 저장(`chunk_id`로 연결)
+- 정책 변경 시 재파싱/재임베딩을 위한 버전 관리(`policy_document_version`)
+- `bge-m3`는 로컬(CPU/GPU) 추론으로 구동 (로컬 개발 우선 방침에 맞음); 추후 처리량이 커지면 전용 임베딩 서버(예: TEI - Text Embeddings Inference)로 분리 검토
+
+### 4.3 지식 그래프 구축 (GraphRAG)
+- LLM(OpenAI)을 이용해 파싱된 텍스트에서 엔티티/관계 추출:
+  - 엔티티: 정책(Policy), 자격요건(EligibilityCriterion), 제외요건(ExclusionCriterion), 기업속성(CompanyAttribute: 규모/업력/지역/업종 등)
+  - 관계: `(:Policy)-[:REQUIRES]->(:EligibilityCriterion)`, `(:Policy)-[:EXCLUDES]->(:ExclusionCriterion)`, `(:EligibilityCriterion)-[:APPLIES_TO]->(:CompanyAttribute)` 등
+- Neo4j에 적재, 정책 단위로 서브그래프 구성
+- 추출 프롬프트는 스키마(허용 엔티티/관계 타입)를 강제하여 일관성 확보 (structured output 사용)
+
+### 4.4 메타 필터링
+- 기업규모/지역/지원기간 등은 **그래프/RAG 이전에** SQL로 1차 필터링하여 후보 정책 집합을 줄인다 (비용/속도 최적화)
+- 이 필터는 3.3절 `policies.meta` 필드를 그대로 사용
+
+### 4.5 LangGraph 매칭 오케스트레이션
+상태 그래프 노드 구성 (예):
+1. `load_company_profile` — 기존 시스템 인터페이스(mock 어댑터, 2.1절)에서 기업 정보 로드
+2. `meta_filter` — `policies.meta`로 1차 후보 필터링
+3. `rag_search` — 후보 정책의 자격/제외요건 관련 청크를 Chroma에서 검색
+4. `graph_reasoning` — Neo4j에서 관련 서브그래프 순회, 조건 간 관계(AND/OR/제외) 파악
+5. `llm_judge` — 검색된 근거 + 그래프 관계를 컨텍스트로 LLM이 항목별 충족여부 판단
+6. `score_aggregate` — 항목별 결과를 0~100 점수로 집계 + 근거 목록 생성
+7. `ask_clarification` (조건부) — 판단에 필요한 정보가 기업 프로필에 없을 경우, 부족한 정보를 **선택형 질문**으로 변환해 채팅으로 반환하고 그래프를 일시 중단(pause) 후 답변 수신 시 재개
+
+### 4.6 매칭 결과 스키마 (예)
+```json
+{
+  "policy_id": "string",
+  "score": 82,
+  "reasons": [
+    {"criterion": "기업규모: 소상공인", "status": "충족", "evidence": "..."},
+    {"criterion": "설립 3년 이내", "status": "미충족", "evidence": "..."},
+    {"criterion": "특정 업종 제외 대상 아님", "status": "정보부족", "evidence": null}
+  ]
+}
+```
+
+---
+
+## 5. 채팅 인터페이스 설계
+
+- WebSocket 채널을 통해 서버가 먼저 "부족한 정보"에 대한 질문을 **선택지(버튼/칩) 형태**로 push
+- 메시지 프로토콜(예):
+```json
+// 서버 → 클라이언트
+{"type": "question", "question_id": "q1", "text": "설립일이 3년 이내인가요?",
+ "options": [{"label": "예", "value": "yes"}, {"label": "아니오", "value": "no"}]}
+
+// 클라이언트 → 서버
+{"type": "answer", "question_id": "q1", "value": "yes"}
+```
+- 자유 텍스트 입력도 허용하되(예외적 케이스 대응), 기본 UX는 선택형
+- 세션 상태(LangGraph state)는 대화 세션 ID로 Postgres에 스냅샷 저장 → 재접속 시 이어서 진행 가능
+
+---
+
+## 6. 인증 / 멀티테넌시
+
+- MVP에서도 **company_id를 모든 신규 테이블의 기준 키**로 설계 (나중에 붙이면 마이그레이션 비용이 큼)
+- 인증은 단순 JWT 발급(이메일/비밀번호 또는 기존 시스템의 로그인 결과를 넘겨받는 방식) — SSO/역할(RBAC)/관리자 화면은 MVP 이후로 명시적으로 제외
+- FastAPI 의존성 주입으로 `current_company` 컨텍스트를 모든 REST/WebSocket 핸들러에 전달, row-level에서 `company_id` 필터 강제
+
+---
+
+## 7. 데이터 모델 (전체 신규 테이블 초안)
+
+| 테이블 | 주요 컬럼 |
+|---|---|
+| `companies_auth` | company_id(PK), email, password_hash, created_at |
+| `policies` | policy_id(PK), title, meta(JSONB), source(bizinfo), collected_at |
+| `policy_attachments` | id, policy_id(FK), file_name, download_url, is_announcement(bool), selection_reason, downloaded_path, format(pdf/hwp/hwpx), parse_status |
+| `document_chunks` | chunk_id, policy_id, section_title, content, page_no *(벡터는 Chroma에 별도 저장, chunk_id로 연결)* |
+| `match_results` | id, company_id, policy_id, score, reasons(JSONB), computed_at |
+| `chat_sessions` | session_id, company_id, langgraph_state(JSONB), updated_at |
+| `chat_messages` | id, session_id, role, content, options(JSONB), created_at |
+
+Neo4j 그래프는 별도 스키마(라벨/관계 타입)로 관리하며 위 관계형 테이블과는 `policy_id`로 연결.
+
+---
+
+## 8. API 개요
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/policies/sync` | 기업마당 API 수집 파이프라인 수동 트리거 (3절) |
+| GET | `/api/companies/{id}/matches` | 저장된 매칭 결과 조회 |
+| POST | `/api/companies/{id}/matches/refresh` | 매칭 재계산 트리거 (LangGraph 실행) |
+| GET | `/api/policies` | 정책 목록/필터 조회 |
+| GET | `/api/policies/{id}` | 정책 상세 + 첨부파일/파싱 상태 |
+| WS | `/ws/chat/{session_id}` | 채팅 세션 (질문/답변 스트리밍) |
+| POST | `/auth/login` | 로그인, JWT 발급 |
+
+---
+
+## 9. 로컬 개발 환경
+
+- `docker-compose.yml`로 다음 구성:
+  - `postgres` (관계형 DB)
+  - `chroma` (벡터 DB 서버 모드)
+  - `neo4j` (community edition)
+  - `backend` (FastAPI, uvicorn --reload) — `BAAI/bge-m3` 임베딩 모델 로드(CPU/GPU)
+  - `frontend` (React dev server)
+- `.env`로 OpenAI API 키, 기업마당 Open API 인증키, DB/Chroma/Neo4j 접속정보 관리
+- 기업 데모그래픽 인터페이스(2.1절)는 로컬 mock 서버(FastAPI 서브앱 또는 별도 스텁)로 대체하여 독립 개발 가능하게 함
+
+---
+
+## 10. 개발 로드맵 (MVP 마일스톤)
+
+1. **기반 구축**: 저장소 구조, Docker Compose, FastAPI/React 스캐폴드, 기업 데모그래픽 mock 서버
+2. **정책 수집 파이프라인**: 기업마당 API 연동, 첨부파일 목록 수집, 공고문 LLM 판별 + 다운로드, `policies`/`policy_attachments` 적재 확인
+3. **파싱 파이프라인**: PDF loader 연동 + 기존 HWP loader 어댑터(2.2절) 연결 + `document_chunks` 적재 확인
+4. **RAG 기본 매칭**: `bge-m3` 임베딩/Chroma 검색 + 메타 필터만으로 1차 매칭(점수 없이 후보 리스트)
+5. **GraphRAG 연동**: 지식그래프 구축 + LangGraph에 `graph_reasoning` 노드 추가
+6. **점수화 & 근거 생성**: `llm_judge` + `score_aggregate` 노드, 매칭 결과 API 완성
+7. **채팅 UX**: WebSocket 프로토콜, 선택형 질문 흐름, 세션 재개
+8. **인증/멀티테넌시**: JWT, company 스코프 적용
+9. **통합 검증**: 실제 기업마당 정책 샘플(HWP 포함) 몇 건으로 end-to-end 시나리오 검증
+
+---
+
+## 11. 리스크 및 미결정 사항
+
+- **공고문 판별 오탐**: 파일명만으로는 공고문 여부가 애매한 경우가 있을 수 있음(예: 명확한 키워드가 없는 파일명) → 규칙 기반 1차 필터 + LLM 2차 판단 + 저신뢰 건 수동 검수 큐로 리스크 완화
+- **기업마당 API 제약**: 호출 한도(rate limit), 응답 스키마 변경, 인증키 관리 등 외부 API 의존 리스크 → 재시도/백오프, 스키마 검증 로직 필요
+- **HWP 파싱 신뢰도**: 구형 HWP는 표/서식이 복잡할 경우 텍스트 유실 가능 → 파싱 품질 모니터링 및 수동 검수 큐 필요
+- **배포 환경 미정**: 현재는 로컬 우선이지만, 추후 클라우드/온프레미스 결정 시 PostgreSQL/Chroma/Neo4j 이전 계획 별도 수립 필요
+- **LLM 비용/속도**: GraphRAG + LLM 판단 단계가 정책 수 증가 시 비용이 커질 수 있음 → 캐싱(`match_results`)과 배치 재계산 전략 필요
+- **기업 데모그래픽 실제 스키마와의 불일치 가능성**: 2.1절의 인터페이스는 가정이므로, 실제 구현 연동 시 어댑터 수정이 필요할 수 있음

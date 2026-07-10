@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Tooling (portable CLI extracted locally, not part of source)
+.tools/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+
+# Docker / DB volumes
+*.db
+data/
+volumes/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
