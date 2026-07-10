@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Chroma (run locally: `chroma run --path ./data/chroma --port 8000`)
     chroma_host: str = "localhost"
     chroma_port: int = 8000
+    chroma_collection_name: str = "document_chunks"
 
     # Neo4j
     neo4j_uri: str = "bolt://localhost:7687"

@@ -9,6 +9,7 @@ from app.db.postgres import get_db
 from app.models.document_chunk import DocumentChunk
 from app.models.policy import Policy
 from app.services.document_parser import parse_pending_attachments
+from app.services.embedding_pipeline import embed_pending_chunks
 from app.services.policy_collector import sync_policies
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
@@ -27,6 +28,11 @@ class ParseResponse(BaseModel):
     parsed: int
     failed: int
     chunks_created: int
+    errors: list[str]
+
+
+class EmbedResponse(BaseModel):
+    embedded: int
     errors: list[str]
 
 
@@ -81,6 +87,15 @@ def trigger_parse(
 ) -> ParseResponse:
     summary = parse_pending_attachments(db, limit=limit)
     return ParseResponse(**summary.__dict__)
+
+
+@router.post("/embed", response_model=EmbedResponse)
+def trigger_embed(
+    limit: int = Query(default=500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> EmbedResponse:
+    summary = embed_pending_chunks(db, limit=limit)
+    return EmbedResponse(**summary.__dict__)
 
 
 @router.get("/{policy_id}/chunks", response_model=list[ChunkOut])

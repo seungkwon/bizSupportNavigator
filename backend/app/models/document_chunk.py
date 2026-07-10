@@ -5,7 +5,9 @@ embedding is wired up (detailed_plan.md 1.2: content/metadata live in Postgres,
 vectors in Chroma, cross-referenced by chunk_id).
 """
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.postgres import Base
@@ -25,3 +27,6 @@ class DocumentChunk(Base):
     section_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     page_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Set once the chunk's vector has been upserted into Chroma (detailed_plan.md 4.2);
+    # null means "not yet embedded, or re-parsed since its last embedding".
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

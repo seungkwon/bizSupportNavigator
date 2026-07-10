@@ -4,9 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
+from app.db.migrations import run_additive_migrations
 from app.db.postgres import Base, engine
 from app.mock.demographics import router as demographics_router
 from app.routers.health import router as health_router
+from app.routers.matching import router as matching_router
 from app.routers.policies import router as policies_router
 
 settings = get_settings()
@@ -16,6 +18,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     # MVP stand-in for Alembic migrations; revisit once the schema stabilizes.
     Base.metadata.create_all(bind=engine)
+    run_additive_migrations(engine)
     yield
 
 
@@ -32,3 +35,4 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(demographics_router)
 app.include_router(policies_router)
+app.include_router(matching_router)

@@ -15,5 +15,16 @@ services:
       timeout: 5s
       retries: 10
 
+  # Version pinned to match the chromadb Python client (backend/requirements.txt) --
+  # client/server protocol isn't stable across chromadb versions (confirmed: client
+  # 1.5.9 against server 0.6.3 fails create_collection with `KeyError('_type')`).
+  chroma:
+    image: chromadb/chroma:1.5.9
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/data
+
 volumes:
   postgres_data:
+  chroma_data:
