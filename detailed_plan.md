@@ -88,13 +88,14 @@ GET /internal/companies/{company_id}/demographics
 
 이 인터페이스는 신규 기능이 참조만 하며, 본 프로젝트에서는 **mock 어댑터**를 만들어 개발/테스트를 진행한다(4.5절 참고). 실제로는 이 데이터가 이미 PostgreSQL에 존재한다고 가정하므로, 어댑터는 최종적으로 해당 PostgreSQL 테이블을 직접 조회하는 리포지토리로 대체될 것을 전제로 설계한다.
 
-### 2.2 HWP/HWPX 파싱 (기존 구현 확인됨)
+### 2.2 HWP/HWPX 파싱 (재구현으로 변경 — 2025-07-10 갱신)
 
-기존 구현 위치: `C:\Users\main\korean_pdf_rag_langgraph\hwp.py`, `hwpx.py` (별도 프로젝트). 본 프로젝트에는 **해당 두 파일을 그대로 복사(vendoring)**하여 `backend/app/loaders/`에 두고, 아래 팩토리로 감싸서 사용한다. 파싱 로직 자체는 수정하지 않는다.
+> **변경 이력**: 원래 계획은 `C:\Users\main\korean_pdf_rag_langgraph\hwp.py`/`hwpx.py`를 그대로 vendoring하는 것이었으나, 실제 개발 머신에 해당 경로/프로젝트가 존재하지 않아 **vendoring이 불가능함을 확인**(Milestone 1 진행 중 발견). 사용자 확인 결과 "HWP는 나중에"로 보류하고 Milestone 1~2를 먼저 진행했고, Milestone 3(파싱 파이프라인) 착수 시점에 실제 수집된 정책 첨부파일 5건 중 3건이 `.hwp`였던 것을 계기로 **아래 로직을 이 프로젝트에서 새로 구현**하기로 확정함. 알고리즘 자체는 원 계획(2.2절 원안)에 기술된 것과 동일한 방식(HWP 5.0 OLE 구조 파싱)을 따르되, 코드는 신규 작성.
 
-- **`HWPLoader`** (`hwp.py`, 구버전 `.hwp` = OLE 구조): `olefile`로 OLE 스트림을 열어 `BodyText/Section*`을 순회, zlib 압축 해제 후 레코드 태그(67)만 추출해 `utf-16` 디코딩. 중국어 문자·제어문자 제거 후 단일 `Document` 1개로 반환. 생성자: `HWPLoader(file_path: str)`
-- **`HWPXLoader`** (`hwpx.py`, 신버전 `.hwpx` = ZIP+XML 구조): ZIP 내 `Contents/section*.xml`을 순회하며 `t` 태그(텍스트 노드)를 모아 단일 `Document` 1개로 반환. 생성자: `HWPXLoader(file_path: str)`
-- 두 로더 모두 **표/서식 구조 없이 순수 텍스트만** 추출한다 (섹션 구분이나 페이지 정보도 없음) — 자격요건이 표로 정리된 공고문의 경우 정보 유실 가능성 있음 (11절 리스크 참고)
+- **`HWPLoader`** (`backend/app/loaders/hwp.py`, `.hwp` = HWP 5.0 OLE 컴파운드 파일 구조): `olefile`로 OLE 스트림을 열어 `FileHeader`로 압축 여부 확인 후 `BodyText/Section*`을 순회, (압축 시) raw deflate로 압축 해제, 레코드 헤더(4바이트: tag 10bit/level 10bit/size 12bit, size가 0xFFF면 확장 4바이트 추가)를 파싱하여 `HWPTAG_PARA_TEXT`(태그값 67)레코드만 `utf-16-le`로 디코딩. 한자(CJK 통합 한자)·제어문자 제거 후 단일 `Document` 1개로 반환. 생성자: `HWPLoader(file_path: str)`. 유효하지 않은 HWP 구조(`FileHeader`/`HwpSummaryInformation` 스트림 없음)면 `ValueError`.
+- **`HWPXLoader`** (`backend/app/loaders/hwpx.py`, `.hwpx` = ZIP+XML 구조): ZIP 내 `Contents/section*.xml`을 섹션 번호 순으로 순회하며 (네임스페이스 무관) `t` 텍스트 노드를 모아 단일 `Document` 1개로 반환. 생성자: `HWPXLoader(file_path: str)`. ZIP/XML 파싱 실패 시 `RuntimeError`.
+- 두 로더 모두 **표/서식 구조 없이 순수 텍스트만** 추출한다 (섹션 구분이나 페이지 정보도 없음) — 자격요건이 표로 정리된 공고문의 경우 정보 유실 가능성 있음 (11절 리스크 참고). 한자 제거 과정에서 ㎡·㎢ 등 특수기호 유실 가능성도 원안과 동일하게 유효함.
+- 실제 수집된 HWP 샘플(`PBLN_000000000124198`, `124199`, `124200`) 3건으로 파싱 결과를 조기 검증함 (11절 리스크 항목 대응).
 
 ```python
 # backend/app/loaders/factory.py
