@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.postgres import get_db
+from app.models.document_chunk import DocumentChunk
 from app.models.policy import Policy
+from app.services.document_parser import parse_pending_attachments
 from app.services.policy_collector import sync_policies
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
@@ -19,6 +21,24 @@ class SyncResponse(BaseModel):
     attachments_downloaded: int
     manual_review_count: int
     errors: list[str]
+
+
+class ParseResponse(BaseModel):
+    parsed: int
+    failed: int
+    chunks_created: int
+    errors: list[str]
+
+
+class ChunkOut(BaseModel):
+    chunk_id: str
+    attachment_id: int
+    chunk_index: int
+    section_title: str | None
+    content: str
+    page_no: int | None
+
+    model_config = {"from_attributes": True}
 
 
 class AttachmentOut(BaseModel):
@@ -52,6 +72,28 @@ def trigger_sync(
 ) -> SyncResponse:
     summary = sync_policies(db, max_pages=max_pages, page_unit=page_unit)
     return SyncResponse(**summary.__dict__)
+
+
+@router.post("/parse", response_model=ParseResponse)
+def trigger_parse(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> ParseResponse:
+    summary = parse_pending_attachments(db, limit=limit)
+    return ParseResponse(**summary.__dict__)
+
+
+@router.get("/{policy_id}/chunks", response_model=list[ChunkOut])
+def get_policy_chunks(policy_id: str, db: Session = Depends(get_db)) -> list[DocumentChunk]:
+    if db.get(Policy, policy_id) is None:
+        raise HTTPException(status_code=404, detail="policy not found")
+    return list(
+        db.execute(
+            select(DocumentChunk)
+            .where(DocumentChunk.policy_id == policy_id)
+            .order_by(DocumentChunk.attachment_id, DocumentChunk.chunk_index)
+        ).scalars()
+    )
 
 
 @router.get("", response_model=list[PolicyOut])
