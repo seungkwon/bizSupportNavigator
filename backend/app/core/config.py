@@ -1,10 +1,16 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Repo root .env, independent of the process's working directory (backend/ vs repo root).
+_REPO_ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_REPO_ROOT_ENV, env_file_encoding="utf-8", extra="ignore"
+    )
 
     # App
     app_name: str = "bizSupportNavigator"
@@ -28,9 +34,13 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     # bizinfo Open API
     bizinfo_api_key: str = ""
+
+    # Local attachment storage (detailed_plan.md 3.1 download_attachment)
+    attachment_storage_dir: str = "./data/attachments"
 
     # Auth
     jwt_secret: str = "change-me"

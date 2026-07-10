@@ -1,0 +1,70 @@
+from datetime import date
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.postgres import get_db
+from app.models.policy import Policy
+from app.services.policy_collector import sync_policies
+
+router = APIRouter(prefix="/api/policies", tags=["policies"])
+
+
+class SyncResponse(BaseModel):
+    fetched: int
+    created: int
+    updated: int
+    attachments_downloaded: int
+    manual_review_count: int
+    errors: list[str]
+
+
+class AttachmentOut(BaseModel):
+    id: int
+    file_name: str
+    is_announcement: bool
+    needs_manual_review: bool
+    downloaded_path: str | None
+    format: str | None
+    parse_status: str
+
+    model_config = {"from_attributes": True}
+
+
+class PolicyOut(BaseModel):
+    policy_id: str
+    title: str
+    meta: dict
+    apply_start_date: date | None = None
+    apply_end_date: date | None = None
+    attachments: list[AttachmentOut] = []
+
+    model_config = {"from_attributes": True}
+
+
+@router.post("/sync", response_model=SyncResponse)
+def trigger_sync(
+    max_pages: int = Query(default=5, ge=1, le=50),
+    page_unit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> SyncResponse:
+    summary = sync_policies(db, max_pages=max_pages, page_unit=page_unit)
+    return SyncResponse(**summary.__dict__)
+
+
+@router.get("", response_model=list[PolicyOut])
+def list_policies(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> list[Policy]:
+    return list(db.execute(select(Policy).limit(limit)).scalars())
+
+
+@router.get("/{policy_id}", response_model=PolicyOut)
+def get_policy(policy_id: str, db: Session = Depends(get_db)) -> Policy:
+    policy = db.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="policy not found")
+    return policy
