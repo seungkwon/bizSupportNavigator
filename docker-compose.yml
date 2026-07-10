@@ -25,6 +25,17 @@ services:
     volumes:
       - chroma_data:/data
 
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-neo4j_password}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+
 volumes:
   postgres_data:
   chroma_data:
+  neo4j_data:

@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 
 _STATEMENTS = (
     "ALTER TABLE document_chunks ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ",
+    "ALTER TABLE policies ADD COLUMN IF NOT EXISTS graph_built_at TIMESTAMPTZ",
 )
 
 

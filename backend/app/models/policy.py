@@ -23,6 +23,9 @@ class Policy(Base):
     apply_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set once this policy's knowledge-graph subgraph has been built in Neo4j
+    # (detailed_plan.md 4.3); null means "not built yet, or its chunks changed since".
+    graph_built_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     attachments: Mapped[list["PolicyAttachment"]] = relationship(
         back_populates="policy", cascade="all, delete-orphan"

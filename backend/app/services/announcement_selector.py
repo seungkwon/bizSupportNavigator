@@ -74,7 +74,7 @@ def _llm_select(candidates: list[AttachmentCandidate]) -> SelectionResult:
     client = OpenAI(api_key=settings.openai_api_key)
     filenames = [c.file_name for c in candidates]
     try:
-        completion = client.chat.completions.parse(
+        completion = client.beta.chat.completions.parse(
             model=settings.openai_model,
             messages=[
                 {

@@ -10,6 +10,7 @@ from app.models.document_chunk import DocumentChunk
 from app.models.policy import Policy
 from app.services.document_parser import parse_pending_attachments
 from app.services.embedding_pipeline import embed_pending_chunks
+from app.services.knowledge_graph import build_pending_graphs
 from app.services.policy_collector import sync_policies
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
@@ -33,6 +34,11 @@ class ParseResponse(BaseModel):
 
 class EmbedResponse(BaseModel):
     embedded: int
+    errors: list[str]
+
+
+class GraphBuildResponse(BaseModel):
+    built: int
     errors: list[str]
 
 
@@ -96,6 +102,15 @@ def trigger_embed(
 ) -> EmbedResponse:
     summary = embed_pending_chunks(db, limit=limit)
     return EmbedResponse(**summary.__dict__)
+
+
+@router.post("/graph/build", response_model=GraphBuildResponse)
+def trigger_graph_build(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> GraphBuildResponse:
+    summary = build_pending_graphs(db, limit=limit)
+    return GraphBuildResponse(**summary.__dict__)
 
 
 @router.get("/{policy_id}/chunks", response_model=list[ChunkOut])

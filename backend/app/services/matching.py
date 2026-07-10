@@ -1,6 +1,8 @@
-"""Milestone 4 matching: SQL meta-filter + Chroma RAG search, no scoring yet
-(detailed_plan.md 4.4/4.5 steps 2-3 `meta_filter` + `rag_search`; `llm_judge` and
-`score_aggregate` are Milestone 6). Returns a ranked candidate list only.
+"""SQL meta-filter + Chroma RAG search (detailed_plan.md 4.4/4.5 steps 2-3
+`meta_filter` + `rag_search`). Exposed as two separate functions so
+app/services/orchestrator.py can wire them up as distinct LangGraph nodes ahead
+of `graph_reasoning` (app/services/graph_reasoning.py); `llm_judge` and
+`score_aggregate` are Milestone 6.
 """
 
 from dataclasses import dataclass, field
@@ -33,7 +35,12 @@ class PolicyCandidate:
     matched_chunks: list[MatchedChunk] = field(default_factory=list)
 
 
-def _eligible_policy_ids(db: Session, only_open: bool) -> list[str]:
+def meta_filter_policy_ids(db: Session, only_open: bool = True) -> list[str]:
+    """detailed_plan.md 4.4: SQL-level filtering (region/size/period) ahead of the
+    more expensive vector/graph steps. Only `apply_end_date` is a clean column today
+    (see app/models/policy.py); region/company-size stay in `meta` until a reliable
+    extraction rule is added.
+    """
     stmt = select(Policy.policy_id)
     if only_open:
         today = date.today()
@@ -41,24 +48,23 @@ def _eligible_policy_ids(db: Session, only_open: bool) -> list[str]:
     return list(db.execute(stmt).scalars())
 
 
-def search_policy_candidates(
+def rag_search_candidates(
     db: Session,
+    eligible_policy_ids: list[str],
     query_text: str,
     limit: int = 10,
-    only_open: bool = True,
 ) -> list[PolicyCandidate]:
-    """SQL-filters open policies (detailed_plan.md 4.4), then ranks them by the best
-    matching chunk's vector similarity to `query_text` (detailed_plan.md 4.5 rag_search).
+    """detailed_plan.md 4.5 rag_search: ranks the meta-filtered candidate set by
+    vector similarity to `query_text`, restricted to `eligible_policy_ids`.
     """
-    eligible_ids = _eligible_policy_ids(db, only_open)
-    if not eligible_ids:
+    if not eligible_policy_ids:
         return []
 
     query_vector = get_embedder().embed_query(query_text)
     result = get_chunk_collection().query(
         query_embeddings=[query_vector],
         n_results=limit * _CHUNKS_PER_QUERY_MULTIPLIER,
-        where={"policy_id": {"$in": eligible_ids}},
+        where={"policy_id": {"$in": eligible_policy_ids}},
     )
 
     ids = result["ids"][0] if result["ids"] else []
@@ -106,3 +112,17 @@ def search_policy_candidates(
             )
         )
     return candidates
+
+
+def search_policy_candidates(
+    db: Session,
+    query_text: str,
+    limit: int = 10,
+    only_open: bool = True,
+) -> list[PolicyCandidate]:
+    """Convenience wrapper chaining meta_filter -> rag_search without graph_reasoning
+    (e.g. for callers that only need vector-ranked candidates). The API route uses
+    app/services/orchestrator.py instead, which adds the graph_reasoning step.
+    """
+    eligible_ids = meta_filter_policy_ids(db, only_open)
+    return rag_search_candidates(db, eligible_ids, query_text, limit)
