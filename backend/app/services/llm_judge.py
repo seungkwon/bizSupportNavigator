@@ -6,6 +6,12 @@ before judging, so eligibility and exclusion criteria share one status vocabular
 (충족/미충족/정보부족) where 충족 always means "good for the company" -- matching
 the detailed_plan.md 4.6 example schema, which lists both under a single `reasons`
 list.
+
+`extra_facts` (Milestone 7) folds in answers collected through the chat
+clarification flow (app/services/chat_service.py) -- plain Korean sentences like
+"설립일이 3년 이내이다: 예" appended to the company profile text, so a criterion
+that first came back 정보부족 can resolve once the user answers a targeted
+question about it.
 """
 
 from dataclasses import dataclass
@@ -38,8 +44,8 @@ class _JudgeResult(BaseModel):
     judgments: list[_JudgedCriterion]
 
 
-def _company_profile_text(company: CompanyDemographics) -> str:
-    return (
+def _company_profile_text(company: CompanyDemographics, extra_facts: list[str] | None = None) -> str:
+    text = (
         f"기업규모: {company.company_size}\n"
         f"지역: {company.region}\n"
         f"업종코드: {company.industry_code}\n"
@@ -48,6 +54,9 @@ def _company_profile_text(company: CompanyDemographics) -> str:
         f"연매출: {company.annual_revenue}\n"
         f"사업계획 요약: {company.raw_business_plan.get('summary', '')}"
     )
+    if extra_facts:
+        text += "\n\n[사용자가 채팅으로 추가 답변한 정보]\n" + "\n".join(f"- {fact}" for fact in extra_facts)
+    return text
 
 
 def _build_items(evidence: PolicyGraphEvidence) -> list[tuple[str, str, bool]]:
@@ -70,6 +79,7 @@ def judge_policy(
     company: CompanyDemographics,
     candidate: PolicyCandidate,
     evidence: PolicyGraphEvidence | None,
+    extra_facts: list[str] | None = None,
 ) -> list[CriterionJudgment]:
     if evidence is None:
         return []
@@ -100,7 +110,7 @@ def judge_policy(
                 {
                     "role": "user",
                     "content": (
-                        f"[기업 프로필]\n{_company_profile_text(company)}\n\n"
+                        f"[기업 프로필]\n{_company_profile_text(company, extra_facts)}\n\n"
                         f"[공고문 발췌]\n{evidence_block}\n\n"
                         f"[판정할 요건]\n{criteria_block}"
                     ),
