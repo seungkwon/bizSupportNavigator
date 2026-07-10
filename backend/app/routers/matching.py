@@ -1,17 +1,22 @@
-"""Candidate-search endpoint running the LangGraph orchestrator (detailed_plan.md
-4.5 steps 1-4: load_company_profile (here, via the mock adapter) -> meta_filter ->
-rag_search -> graph_reasoning). Scoring/clarification (`llm_judge`,
-`score_aggregate`, `ask_clarification`) are Milestone 6, wired through the full
-`/matches` API (detailed_plan.md 8) once those land.
+"""Matching endpoints (detailed_plan.md 8): `/matches` (read cached results) and
+`/matches/refresh` (recompute via the full LangGraph pipeline -- meta_filter ->
+rag_search -> graph_reasoning -> llm_judge -> score_aggregate, then persist to
+`match_results`). `/policy-candidates` is the lighter Milestone 4/5 debug endpoint
+(vector-ranked candidates + graph evidence, no LLM judging/scoring/cost).
 """
+
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.postgres import get_db
 from app.mock.demographics import get_company_demographics
-from app.services.orchestrator import run_policy_matching
+from app.models.policy import Policy
+from app.services.match_results import list_match_results, save_match_results
+from app.services.orchestrator import run_full_matching, run_policy_matching
 
 router = APIRouter(prefix="/api/companies", tags=["matching"])
 
@@ -35,6 +40,20 @@ class PolicyCandidateOut(BaseModel):
     matched_chunks: list[MatchedChunkOut]
     eligibility_criteria: list[GraphCriterionOut]
     exclusion_criteria: list[GraphCriterionOut]
+
+
+class MatchReasonOut(BaseModel):
+    criterion: str
+    status: str
+    evidence: str | None
+
+
+class MatchResultOut(BaseModel):
+    policy_id: str
+    title: str
+    score: int
+    reasons: list[MatchReasonOut]
+    computed_at: datetime
 
 
 def _default_query_text(company) -> str:
@@ -75,3 +94,48 @@ def get_policy_candidates(
             )
         )
     return results
+
+
+@router.post("/{company_id}/matches/refresh", response_model=list[MatchResultOut])
+def refresh_matches(
+    company_id: str,
+    query: str | None = Query(default=None, description="비어 있으면 기업 프로필로 자동 생성"),
+    limit: int = Query(default=10, ge=1, le=50),
+    only_open: bool = Query(default=True),
+    db: Session = Depends(get_db),
+) -> list[MatchResultOut]:
+    company = get_company_demographics(company_id)
+    query_text = query or _default_query_text(company)
+    scored_matches = run_full_matching(db, company, query_text, limit=limit, only_open=only_open)
+    computed_at = save_match_results(db, company_id, scored_matches)
+    return [
+        MatchResultOut(
+            policy_id=match.policy_id,
+            title=match.title,
+            score=match.score,
+            reasons=[MatchReasonOut(**vars(reason)) for reason in match.reasons],
+            computed_at=computed_at,
+        )
+        for match in scored_matches
+    ]
+
+
+@router.get("/{company_id}/matches", response_model=list[MatchResultOut])
+def get_matches(company_id: str, db: Session = Depends(get_db)) -> list[MatchResultOut]:
+    results = list_match_results(db, company_id)
+    titles = {
+        policy.policy_id: policy.title
+        for policy in db.execute(
+            select(Policy).where(Policy.policy_id.in_([r.policy_id for r in results]))
+        ).scalars()
+    }
+    return [
+        MatchResultOut(
+            policy_id=result.policy_id,
+            title=titles.get(result.policy_id, result.policy_id),
+            score=result.score,
+            reasons=[MatchReasonOut(**reason) for reason in result.reasons],
+            computed_at=result.computed_at,
+        )
+        for result in results
+    ]
