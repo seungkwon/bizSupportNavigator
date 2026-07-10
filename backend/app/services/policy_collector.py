@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models.policy import Policy, PolicyAttachment
-from app.services.announcement_selector import AttachmentCandidate, select_announcement_file
+from app.services.announcement_selector import AttachmentCandidate, SelectionResult, select_announcement_file
 from app.services.attachment_downloader import download_attachment, infer_format
 from app.services.bizinfo_client import BizinfoClient, parse_bizinfo_datetime
 
@@ -88,11 +88,26 @@ def persist_policy_meta(db: Session, item: dict) -> tuple[Policy, bool]:
 
 
 def sync_attachments(db: Session, policy: Policy, item: dict, summary: SyncSummary) -> None:
-    candidates = extract_attachment_candidates(item)
+    """Diffs against the policy's existing attachments by `download_url` instead
+    of unconditionally deleting and recreating every row on every sync.
 
-    # Re-derive attachment rows each sync so stale candidates don't linger.
+    Confirmed by testing (detailed_plan.md 11): recreating an already-parsed
+    attachment's row -- even when bizinfo returns the exact same file -- cascade
+    deletes its `document_chunks` (FK `ondelete="CASCADE"`), silently discarding
+    prior parsing/embedding/graph work. A daily incremental sync would hit this
+    on every run for every already-processed policy, and a transient download
+    failure on re-sync would permanently wipe out previously-good data instead
+    of just leaving it unchanged. Only attachments no longer present in the
+    fresh candidate list are dropped (the original "stale candidates" concern);
+    everything else is a no-op on repeat syncs.
+    """
+    candidates = extract_attachment_candidates(item)
+    existing_by_url = {a.download_url: a for a in policy.attachments}
+    candidate_urls = {c.download_url for c in candidates}
+
     for existing in list(policy.attachments):
-        db.delete(existing)
+        if existing.download_url not in candidate_urls:
+            db.delete(existing)
     db.flush()
 
     if not candidates:
@@ -104,29 +119,52 @@ def sync_attachments(db: Session, policy: Policy, item: dict, summary: SyncSumma
         is_selected = (
             result.selected is not None and candidate.download_url == result.selected.download_url
         )
-        attachment = PolicyAttachment(
-            policy_id=policy.policy_id,
-            file_name=candidate.file_name,
-            download_url=candidate.download_url,
-            is_announcement=is_selected,
-            selection_reason=result.reason if is_selected else None,
-            needs_manual_review=result.needs_manual_review and result.selected is None,
-            format=infer_format(candidate.file_name),
-            parse_status="pending",
-        )
-        if is_selected:
-            try:
-                attachment.downloaded_path = download_attachment(
-                    candidate.download_url, candidate.file_name, policy.policy_id
-                )
-                summary.attachments_downloaded += 1
-            except Exception as exc:  # noqa: BLE001 - external download, degrade gracefully
-                attachment.parse_status = "download_failed"
-                summary.errors.append(f"{policy.policy_id}: 다운로드 실패 ({exc})")
-        db.add(attachment)
+        existing = existing_by_url.get(candidate.download_url)
+        if existing is not None:
+            _update_existing_attachment(existing, result, is_selected)
+        else:
+            _create_new_attachment(db, policy, candidate, result, is_selected, summary)
 
     if result.needs_manual_review:
         summary.manual_review_count += 1
+
+
+def _update_existing_attachment(
+    attachment: PolicyAttachment, result: SelectionResult, is_selected: bool
+) -> None:
+    attachment.is_announcement = is_selected
+    attachment.selection_reason = result.reason if is_selected else None
+    attachment.needs_manual_review = result.needs_manual_review and result.selected is None
+
+
+def _create_new_attachment(
+    db: Session,
+    policy: Policy,
+    candidate: AttachmentCandidate,
+    result: SelectionResult,
+    is_selected: bool,
+    summary: SyncSummary,
+) -> None:
+    attachment = PolicyAttachment(
+        policy_id=policy.policy_id,
+        file_name=candidate.file_name,
+        download_url=candidate.download_url,
+        is_announcement=is_selected,
+        selection_reason=result.reason if is_selected else None,
+        needs_manual_review=result.needs_manual_review and result.selected is None,
+        format=infer_format(candidate.file_name),
+        parse_status="pending",
+    )
+    if is_selected:
+        try:
+            attachment.downloaded_path = download_attachment(
+                candidate.download_url, candidate.file_name, policy.policy_id
+            )
+            summary.attachments_downloaded += 1
+        except Exception as exc:  # noqa: BLE001 - external download, degrade gracefully
+            attachment.parse_status = "download_failed"
+            summary.errors.append(f"{policy.policy_id}: 다운로드 실패 ({exc})")
+    db.add(attachment)
 
 
 def sync_policies(

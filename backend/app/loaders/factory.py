@@ -9,6 +9,27 @@ from app.loaders.hwpx import HWPXLoader
 
 SUPPORTED_FORMATS = ("pdf", "hwp", "hwpx")
 
+# bizinfo attachment filenames aren't always trustworthy about their own format:
+# confirmed in Milestone 9 integration testing, a real `*.hwpx`-named download
+# turned out to be OLE-format HWP 5.0 content (magic bytes below), which
+# HWPXLoader can't open (it's not a ZIP). Since hwp/hwpx share no container
+# structure, sniffing these two signatures is enough to tell them apart
+# regardless of what the filename claims.
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_ZIP_SIGNATURE = b"PK\x03\x04"
+
+
+def _sniff_hwp_variant(file_path: str, declared_format: str) -> str:
+    if declared_format not in ("hwp", "hwpx"):
+        return declared_format
+    with open(file_path, "rb") as f:
+        head = f.read(8)
+    if head.startswith(_OLE_SIGNATURE):
+        return "hwp"
+    if head.startswith(_ZIP_SIGNATURE):
+        return "hwpx"
+    return declared_format
+
 
 class AttachmentLoaderFactory:
     """Returns the langchain Loader instance matching a file format."""
@@ -26,4 +47,5 @@ class AttachmentLoaderFactory:
         return loader_cls(file_path)
 
     def load(self, file_path: str, file_format: str) -> list[Document]:
-        return self.get_loader(file_path, file_format).load()
+        actual_format = _sniff_hwp_variant(file_path, file_format)
+        return self.get_loader(file_path, actual_format).load()
