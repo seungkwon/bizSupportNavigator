@@ -7,6 +7,11 @@ psycopg[binary]==3.3.4
 python-dotenv==1.2.2
 python-jose[cryptography]==3.5.0
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 (unmaintained) detects the bcrypt backend via `bcrypt.__about__`,
+# which bcrypt removed in 4.1+ -- breaks with AttributeError/"password cannot be
+# longer than 72 bytes" on install. Pinned to the last compatible release,
+# confirmed working 2026-07-10 (Milestone 8).
+bcrypt==4.0.1
 httpx==0.28.1
 websockets==15.0.1
 

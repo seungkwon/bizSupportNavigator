@@ -3,6 +3,10 @@
 rag_search -> graph_reasoning -> llm_judge -> score_aggregate, then persist to
 `match_results`). `/policy-candidates` is the lighter Milestone 4/5 debug endpoint
 (vector-ranked candidates + graph evidence, no LLM judging/scoring/cost).
+
+All three are company-scoped (detailed_plan.md 6): `require_company_scope`
+checks the bearer JWT's company against the `company_id` path param, so one
+company can't read another's data by guessing IDs in the URL.
 """
 
 from datetime import datetime
@@ -12,6 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.deps import require_company_scope
 from app.db.postgres import get_db
 from app.mock.demographics import get_company_demographics
 from app.models.policy import Policy
@@ -71,6 +76,7 @@ def get_policy_candidates(
     limit: int = Query(default=10, ge=1, le=50),
     only_open: bool = Query(default=True),
     db: Session = Depends(get_db),
+    _: str = Depends(require_company_scope),
 ) -> list[PolicyCandidateOut]:
     company = get_company_demographics(company_id)
     query_text = query or _default_query_text(company)
@@ -103,6 +109,7 @@ def refresh_matches(
     limit: int = Query(default=10, ge=1, le=50),
     only_open: bool = Query(default=True),
     db: Session = Depends(get_db),
+    _: str = Depends(require_company_scope),
 ) -> list[MatchResultOut]:
     company = get_company_demographics(company_id)
     query_text = query or _default_query_text(company)
@@ -121,7 +128,11 @@ def refresh_matches(
 
 
 @router.get("/{company_id}/matches", response_model=list[MatchResultOut])
-def get_matches(company_id: str, db: Session = Depends(get_db)) -> list[MatchResultOut]:
+def get_matches(
+    company_id: str,
+    db: Session = Depends(get_db),
+    _: str = Depends(require_company_scope),
+) -> list[MatchResultOut]:
     results = list_match_results(db, company_id)
     titles = {
         policy.policy_id: policy.title

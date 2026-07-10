@@ -17,56 +17,93 @@ seconds) and must run via `asyncio.to_thread`, not awaited directly: calling
 them inline blocks the event loop, which starves the websocket keepalive
 ping/pong and kills the connection with a "keepalive ping timeout" (observed
 while testing this).
+
+Auth (Milestone 8, detailed_plan.md 6): browsers can't set a custom
+`Authorization` header on a WebSocket handshake, so the JWT travels as a
+`?token=` query param instead. `data["company_id"]` on `start` and the
+resumed `chat_sessions.company_id` on reconnect must both match the token's
+company -- otherwise a valid token for one company could resume or drive
+another company's chat session just by guessing its session_id.
 """
 
 import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy.orm import Session as DbSession
 
+from app.core.security import decode_company_id
 from app.db.postgres import SessionLocal
 from app.services.chat_service import advance_session, create_session, get_session, record_answer, resume_payload
 
 router = APIRouter(tags=["chat"])
 
+_WRONG_COMPANY = {"type": "error", "message": "다른 기업의 세션에 접근할 수 없습니다"}
+
+
+async def _handle_start(db: DbSession, session_id: str, data: dict, authenticated_company_id: str) -> dict:
+    if data.get("company_id") != authenticated_company_id:
+        return {"type": "error", "message": "토큰의 기업과 일치하지 않습니다"}
+    session = await asyncio.to_thread(
+        create_session,
+        db,
+        session_id,
+        company_id=authenticated_company_id,
+        query_text=data.get("query"),
+        limit=data.get("limit", 10),
+        only_open=data.get("only_open", True),
+    )
+    return await asyncio.to_thread(advance_session, db, session)
+
+
+async def _handle_answer(db: DbSession, session_id: str, data: dict, authenticated_company_id: str) -> dict:
+    session = get_session(db, session_id)
+    if session is None:
+        return {"type": "error", "message": "세션이 시작되지 않았습니다 (type=start 먼저 전송)"}
+    if session.company_id != authenticated_company_id:
+        return _WRONG_COMPANY
+    await asyncio.to_thread(record_answer, db, session, data["question_id"], data["value"])
+    return await asyncio.to_thread(advance_session, db, session)
+
+
+async def _send_resume_if_any(websocket: WebSocket, db: DbSession, session_id: str, authenticated_company_id: str) -> bool:
+    """Returns False (and closes the socket) if the session belongs to a different company."""
+    session = get_session(db, session_id)
+    if session is None:
+        return True
+    if session.company_id != authenticated_company_id:
+        await websocket.send_json(_WRONG_COMPANY)
+        await websocket.close(code=1008)
+        return False
+    payload = await asyncio.to_thread(resume_payload, db, session)
+    if payload is not None:
+        await websocket.send_json(payload)
+    return True
+
 
 @router.websocket("/ws/chat/{session_id}")
 async def chat_ws(websocket: WebSocket, session_id: str) -> None:
+    token = websocket.query_params.get("token")
+    authenticated_company_id = decode_company_id(token) if token else None
+    if authenticated_company_id is None:
+        await websocket.close(code=1008)  # policy violation
+        return
+
     await websocket.accept()
     db = SessionLocal()
     try:
-        session = get_session(db, session_id)
-        if session is not None:
-            payload = await asyncio.to_thread(resume_payload, db, session)
-            if payload is not None:
-                await websocket.send_json(payload)
+        if not await _send_resume_if_any(websocket, db, session_id, authenticated_company_id):
+            return
 
         while True:
             data = await websocket.receive_json()
             message_type = data.get("type")
 
             if message_type == "start":
-                session = await asyncio.to_thread(
-                    create_session,
-                    db,
-                    session_id,
-                    company_id=data["company_id"],
-                    query_text=data.get("query"),
-                    limit=data.get("limit", 10),
-                    only_open=data.get("only_open", True),
-                )
-                payload = await asyncio.to_thread(advance_session, db, session)
+                payload = await _handle_start(db, session_id, data, authenticated_company_id)
             elif message_type == "answer":
-                session = get_session(db, session_id)
-                if session is None:
-                    await websocket.send_json(
-                        {"type": "error", "message": "세션이 시작되지 않았습니다 (type=start 먼저 전송)"}
-                    )
-                    continue
-                await asyncio.to_thread(record_answer, db, session, data["question_id"], data["value"])
-                payload = await asyncio.to_thread(advance_session, db, session)
+                payload = await _handle_answer(db, session_id, data, authenticated_company_id)
             else:
-                await websocket.send_json({"type": "error", "message": f"알 수 없는 메시지 타입: {message_type}"})
-                continue
+                payload = {"type": "error", "message": f"알 수 없는 메시지 타입: {message_type}"}
 
             await websocket.send_json(payload)
     except WebSocketDisconnect:
