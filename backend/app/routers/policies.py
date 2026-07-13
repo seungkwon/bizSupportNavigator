@@ -10,6 +10,7 @@ from app.models.document_chunk import DocumentChunk
 from app.models.policy import Policy
 from app.services.document_parser import parse_pending_attachments
 from app.services.embedding_pipeline import embed_pending_chunks
+from app.services.graph_reasoning import fetch_graph_evidence
 from app.services.knowledge_graph import build_pending_graphs
 from app.services.policy_collector import sync_policies
 
@@ -111,6 +112,113 @@ def trigger_graph_build(
 ) -> GraphBuildResponse:
     summary = build_pending_graphs(db, limit=limit)
     return GraphBuildResponse(**summary.__dict__)
+
+
+class CriterionOut(BaseModel):
+    description: str
+    company_attribute: str | None
+
+
+class PolicyCriteriaOut(BaseModel):
+    policy_id: str
+    eligibility_criteria: list[CriterionOut]
+    exclusion_criteria: list[CriterionOut]
+
+
+class GraphNode(BaseModel):
+    id: str
+    type: str
+    label: str
+
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+
+
+class GraphOut(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+
+
+_CATEGORY_FIELD = "pldirSportRealmLclasCodeNm"
+
+
+@router.get("/graph/overview", response_model=GraphOut)
+def get_policy_graph_overview(db: Session = Depends(get_db)) -> GraphOut:
+    """Category nodes with each policy attached as a leaf -- click a policy
+    (the /{policy_id}/graph center node) to drill into its eligibility/exclusion graph.
+    """
+    policies = list(db.execute(select(Policy)).scalars())
+
+    nodes: dict[str, GraphNode] = {}
+    edges: list[GraphEdge] = []
+    for policy in policies:
+        category = (policy.meta or {}).get(_CATEGORY_FIELD) or "기타"
+        category_id = f"category:{category}"
+        if category_id not in nodes:
+            nodes[category_id] = GraphNode(id=category_id, type="category", label=category)
+
+        policy_node_id = f"policy:{policy.policy_id}"
+        nodes[policy_node_id] = GraphNode(id=policy_node_id, type="policy", label=policy.title)
+        edges.append(GraphEdge(source=category_id, target=policy_node_id, type="has_policy"))
+
+    return GraphOut(nodes=list(nodes.values()), edges=edges)
+
+
+@router.get("/{policy_id}/graph", response_model=GraphOut)
+def get_policy_graph_detail(policy_id: str, db: Session = Depends(get_db)) -> GraphOut:
+    """Policy as the center node, fanning out to its eligibility/exclusion criteria
+    (and, where known, the company attribute each criterion applies to) -- the
+    detail view opened by clicking a policy node in /graph/overview.
+    """
+    policy = db.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=404, detail="policy not found")
+
+    evidence = fetch_graph_evidence([policy_id]).get(policy_id)
+
+    center_id = f"policy:{policy_id}"
+    nodes: dict[str, GraphNode] = {center_id: GraphNode(id=center_id, type="policy", label=policy.title)}
+    edges: list[GraphEdge] = []
+
+    if evidence is not None:
+        for index, criterion in enumerate(evidence.eligibility_criteria):
+            node_id = f"elig:{policy_id}:{index}"
+            nodes[node_id] = GraphNode(id=node_id, type="eligibility", label=criterion.description)
+            edges.append(GraphEdge(source=center_id, target=node_id, type="requires"))
+            if criterion.company_attribute:
+                attr_id = f"attr:{criterion.company_attribute}"
+                nodes[attr_id] = GraphNode(id=attr_id, type="company_attribute", label=criterion.company_attribute)
+                edges.append(GraphEdge(source=node_id, target=attr_id, type="applies_to"))
+
+        for index, criterion in enumerate(evidence.exclusion_criteria):
+            node_id = f"excl:{policy_id}:{index}"
+            nodes[node_id] = GraphNode(id=node_id, type="exclusion", label=criterion.description)
+            edges.append(GraphEdge(source=center_id, target=node_id, type="excludes"))
+            if criterion.company_attribute:
+                attr_id = f"attr:{criterion.company_attribute}"
+                nodes[attr_id] = GraphNode(id=attr_id, type="company_attribute", label=criterion.company_attribute)
+                edges.append(GraphEdge(source=node_id, target=attr_id, type="applies_to"))
+
+    return GraphOut(nodes=list(nodes.values()), edges=edges)
+
+
+@router.get("/{policy_id}/criteria", response_model=PolicyCriteriaOut)
+def get_policy_criteria(policy_id: str, db: Session = Depends(get_db)) -> PolicyCriteriaOut:
+    if db.get(Policy, policy_id) is None:
+        raise HTTPException(status_code=404, detail="policy not found")
+    evidence = fetch_graph_evidence([policy_id]).get(policy_id)
+    return PolicyCriteriaOut(
+        policy_id=policy_id,
+        eligibility_criteria=[
+            CriterionOut(**vars(c)) for c in (evidence.eligibility_criteria if evidence else [])
+        ],
+        exclusion_criteria=[
+            CriterionOut(**vars(c)) for c in (evidence.exclusion_criteria if evidence else [])
+        ],
+    )
 
 
 @router.get("/{policy_id}/chunks", response_model=list[ChunkOut])

@@ -58,33 +58,42 @@ def parse_attachment(db: Session, attachment: PolicyAttachment) -> int:
                 attachment_id=attachment.id,
                 chunk_index=index,
                 section_title=candidate.section_title,
-                content=candidate.content,
+                content=candidate.content.replace("\x00", ""),
                 page_no=candidate.page_no,
             )
         )
     attachment.parse_status = "parsed"
     db.add(attachment)
+    db.flush()
     return len(candidates)
 
 
 def parse_pending_attachments(db: Session, limit: int = 100) -> ParseSummary:
     summary = ParseSummary()
-    attachments = db.execute(
-        select(PolicyAttachment)
-        .where(PolicyAttachment.is_announcement.is_(True))
-        .where(PolicyAttachment.downloaded_path.is_not(None))
-        .where(PolicyAttachment.parse_status.in_(_PENDING_STATUSES))
-        .limit(limit)
-    ).scalars()
+    attachment_ids = list(
+        db.execute(
+            select(PolicyAttachment.id)
+            .where(PolicyAttachment.is_announcement.is_(True))
+            .where(PolicyAttachment.downloaded_path.is_not(None))
+            .where(PolicyAttachment.parse_status.in_(_PENDING_STATUSES))
+            .limit(limit)
+        ).scalars()
+    )
 
-    for attachment in attachments:
+    for attachment_id in attachment_ids:
+        attachment = db.get(PolicyAttachment, attachment_id)
         try:
             count = parse_attachment(db, attachment)
+            db.commit()
             summary.parsed += 1
             summary.chunks_created += count
         except Exception as exc:  # noqa: BLE001 - degrade to manual review, keep parsing the rest
+            db.rollback()
+            attachment = db.get(PolicyAttachment, attachment_id)
+            attachment.parse_status = "failed"
+            db.add(attachment)
+            db.commit()
             summary.failed += 1
             summary.errors.append(f"{attachment.policy_id}/{attachment.file_name}: {exc}")
 
-    db.commit()
     return summary
