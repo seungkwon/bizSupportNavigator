@@ -74,11 +74,12 @@ export default function GraphPage() {
   }
 
   return (
-    <main className="page">
-      <div className="page-header">
-        <h1>정책 그래프 탐색</h1>
+    <main className="mx-auto max-w-4xl px-4 py-8">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold text-base-content">정책 그래프 탐색</h1>
         {detail && (
           <button
+            className="btn btn-ghost btn-sm"
             onClick={() => {
               setDetail(null)
               setDetailTitle(null)
@@ -88,12 +89,12 @@ export default function GraphPage() {
           </button>
         )}
       </div>
-      {detailTitle && <p className="graph-subtitle">{detailTitle}</p>}
-      {error && <p className="error-text">{error}</p>}
+      {detailTitle && <p className="mb-3 font-medium text-base-content">{detailTitle}</p>}
+      {error && <p className="mb-4 text-sm text-error">{error}</p>}
       {loading ? (
-        <p>불러오는 중...</p>
+        <p className="text-base-content/70">불러오는 중...</p>
       ) : (
-        <div className="graph-canvas">
+        <div className="overflow-hidden rounded-box border border-base-300">
           <ForceGraph2D
             graphData={graphData}
             nodeId="id"
@@ -108,10 +109,10 @@ export default function GraphPage() {
           />
         </div>
       )}
-      <ul className="graph-legend">
+      <ul className="mt-4 flex flex-wrap gap-4 text-sm">
         {Object.entries(NODE_TYPE_LABEL).map(([type, label]) => (
-          <li key={type}>
-            <span className="legend-dot" style={{ background: NODE_COLOR[type] }} />
+          <li key={type} className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: NODE_COLOR[type] }} />
             {label}
           </li>
         ))}

@@ -30,48 +30,58 @@ interface CompanyProfile {
   raw_business_plan: { summary?: string }
 }
 
-function scoreTier(score: number): 'high' | 'mid' | 'low' {
-  if (score >= 70) return 'high'
-  if (score >= 40) return 'mid'
-  return 'low'
+function scoreBadgeClass(score: number): string {
+  if (score >= 70) return 'badge-success'
+  if (score >= 40) return 'badge-warning'
+  return 'badge-error'
+}
+
+function statusBadgeClass(status: string): string {
+  if (status === '충족') return 'badge-success'
+  if (status === '미충족') return 'badge-error'
+  return 'badge-neutral'
 }
 
 function ProfileCard({ profile }: { profile: CompanyProfile }) {
   return (
-    <div className="profile-card">
-      <div className="profile-card-header">
-        <h2>{profile.company_name}</h2>
-        <span className="profile-reg-no">{profile.biz_registration_no}</span>
+    <div className="card mb-6 border border-base-300 bg-base-100">
+      <div className="card-body gap-4">
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-lg font-semibold text-base-content">{profile.company_name}</h2>
+          <span className="text-sm text-base-content/60">{profile.biz_registration_no}</span>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3">
+          <div>
+            <dt className="text-xs text-base-content/60">지역</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.region}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-base-content/60">기업규모</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.company_size}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-base-content/60">업종코드</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.industry_code}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-base-content/60">설립일</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.established_date}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-base-content/60">종업원수</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.employee_count.toLocaleString('ko-KR')}명</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-base-content/60">연매출</dt>
+            <dd className="mt-0.5 text-sm font-medium">{profile.annual_revenue.toLocaleString('ko-KR')}원</dd>
+          </div>
+        </dl>
+        {profile.raw_business_plan?.summary && (
+          <p className="border-t border-base-300 pt-3 text-sm text-base-content/70">
+            {profile.raw_business_plan.summary}
+          </p>
+        )}
       </div>
-      <dl className="profile-grid">
-        <div>
-          <dt>지역</dt>
-          <dd>{profile.region}</dd>
-        </div>
-        <div>
-          <dt>기업규모</dt>
-          <dd>{profile.company_size}</dd>
-        </div>
-        <div>
-          <dt>업종코드</dt>
-          <dd>{profile.industry_code}</dd>
-        </div>
-        <div>
-          <dt>설립일</dt>
-          <dd>{profile.established_date}</dd>
-        </div>
-        <div>
-          <dt>종업원수</dt>
-          <dd>{profile.employee_count.toLocaleString('ko-KR')}명</dd>
-        </div>
-        <div>
-          <dt>연매출</dt>
-          <dd>{profile.annual_revenue.toLocaleString('ko-KR')}원</dd>
-        </div>
-      </dl>
-      {profile.raw_business_plan?.summary && (
-        <p className="profile-summary">{profile.raw_business_plan.summary}</p>
-      )}
     </div>
   )
 }
@@ -126,43 +136,50 @@ export default function DashboardPage() {
   }
 
   return (
-    <main className="page">
-      <div className="page-header">
-        <h1>매칭 대시보드</h1>
-        <button onClick={handleRefresh} disabled={refreshing}>
+    <main className="mx-auto max-w-3xl px-4 py-8">
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold text-base-content">매칭 대시보드</h1>
+        <button className="btn btn-primary btn-sm" onClick={handleRefresh} disabled={refreshing}>
           {refreshing ? '재계산 중... (수십 초 소요될 수 있음)' : '다시 계산'}
         </button>
       </div>
       {profile && <ProfileCard profile={profile} />}
-      {error && <p className="error-text">{error}</p>}
+      {error && <p className="mb-4 text-sm text-error">{error}</p>}
       {loading ? (
-        <p>불러오는 중...</p>
+        <p className="text-base-content/70">불러오는 중...</p>
       ) : matches.length === 0 ? (
-        <p>매칭 결과가 없습니다. "다시 계산"을 눌러 계산해보세요.</p>
+        <p className="text-base-content/70">매칭 결과가 없습니다. &quot;다시 계산&quot;을 눌러 계산해보세요.</p>
       ) : (
-        <ul className="match-list">
+        <ul className="flex flex-col gap-3">
           {matches.map((match) => (
-            <li key={match.policy_id} className="match-card">
+            <li key={match.policy_id} className="card overflow-hidden border border-base-300 bg-base-100">
               <button
-                className="match-card-header"
+                className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
                 onClick={() => setExpanded(expanded === match.policy_id ? null : match.policy_id)}
               >
-                <span className="match-title">{match.title}</span>
-                <span className={`score-badge score-${scoreTier(match.score)}`}>{match.score}점</span>
+                <span className="font-medium text-base-content">{match.title}</span>
+                <span className={`badge ${scoreBadgeClass(match.score)} shrink-0 font-semibold`}>
+                  {match.score}점
+                </span>
               </button>
               {expanded === match.policy_id && (
                 <>
-                  <ul className="reason-list">
+                  <ul className="flex flex-col gap-2.5 border-t border-base-300 px-4 pb-4 pt-3">
                     {match.reasons.map((reason, i) => (
-                      <li key={i} className={`reason-item status-${reason.status}`}>
-                        <span className="reason-status">{reason.status}</span>
-                        <span className="reason-criterion">{reason.criterion}</span>
-                        {reason.evidence && <p className="reason-evidence">{reason.evidence}</p>}
+                      <li key={i} className="pt-2 text-sm first:pt-0">
+                        <span className={`badge badge-sm ${statusBadgeClass(reason.status)} mr-2`}>
+                          {reason.status}
+                        </span>
+                        <span>{reason.criterion}</span>
+                        {reason.evidence && (
+                          <p className="mt-1 text-xs text-base-content/60">{reason.evidence}</p>
+                        )}
                       </li>
                     ))}
                   </ul>
-                  <div className="match-card-actions">
+                  <div className="px-4 pb-4">
                     <button
+                      className="btn btn-outline btn-primary btn-sm"
                       onClick={() =>
                         navigate(
                           `/chat?policy_id=${encodeURIComponent(match.policy_id)}&title=${encodeURIComponent(match.title)}`,

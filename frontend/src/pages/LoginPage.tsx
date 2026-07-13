@@ -32,23 +32,37 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="page page-narrow">
-      <h1>로그인</h1>
-      <form className="form-card" onSubmit={handleSubmit}>
-        <label>
-          이메일
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
-        <label>
-          비밀번호
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-        </label>
-        {error && <p className="error-text">{error}</p>}
-        <button type="submit" disabled={loading}>
-          {loading ? '로그인 중...' : '로그인'}
-        </button>
+    <main className="mx-auto flex min-h-svh max-w-sm flex-col justify-center px-4 py-12">
+      <h1 className="mb-6 text-2xl font-semibold text-base-content">로그인</h1>
+      <form className="card border border-base-300 bg-base-100 shadow-sm" onSubmit={handleSubmit}>
+        <div className="card-body gap-4">
+          <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+            이메일
+            <input
+              type="email"
+              className="input w-full"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </label>
+          <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+            비밀번호
+            <input
+              type="password"
+              className="input w-full"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </label>
+          {error && <p className="text-sm text-error">{error}</p>}
+          <button type="submit" className="btn btn-primary mt-2" disabled={loading}>
+            {loading ? '로그인 중...' : '로그인'}
+          </button>
+        </div>
       </form>
-      <p className="hint">데모 계정: demo-001@example.com / demo1234</p>
+      <p className="mt-4 text-center text-sm text-base-content/60">데모 계정: demo-001@example.com / demo1234</p>
     </main>
   )
 }

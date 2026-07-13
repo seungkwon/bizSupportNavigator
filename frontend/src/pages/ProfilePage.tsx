@@ -139,142 +139,183 @@ export default function ProfilePage() {
   }
 
   return (
-    <main className="page">
-      <div className="page-header">
-        <h1>기업 정보 관리</h1>
-      </div>
+    <main className="mx-auto max-w-3xl px-4 py-8">
+      <h1 className="mb-6 text-2xl font-semibold text-base-content">기업 정보 관리</h1>
 
       {form && (
-        <form className="form-card" onSubmit={handleProfileSubmit}>
-          <label>
-            기업명
-            <input value={form.company_name} onChange={(e) => updateField('company_name', e.target.value)} required />
-          </label>
-          <label>
-            사업자등록번호
-            <input
-              value={form.biz_registration_no}
-              onChange={(e) => updateField('biz_registration_no', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            지역
-            <input value={form.region} onChange={(e) => updateField('region', e.target.value)} required />
-          </label>
-          <label>
-            기업규모
-            <input value={form.company_size} onChange={(e) => updateField('company_size', e.target.value)} required />
-          </label>
-          <label>
-            업종코드
-            <input value={form.industry_code} onChange={(e) => updateField('industry_code', e.target.value)} required />
-          </label>
-          <label>
-            설립일
-            <input
-              type="date"
-              value={form.established_date}
-              onChange={(e) => updateField('established_date', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            종업원수
-            <input
-              type="number"
-              min={0}
-              value={form.employee_count}
-              onChange={(e) => updateField('employee_count', Number(e.target.value))}
-              required
-            />
-          </label>
-          <label>
-            연매출(원)
-            <input
-              type="number"
-              min={0}
-              value={form.annual_revenue}
-              onChange={(e) => updateField('annual_revenue', Number(e.target.value))}
-              required
-            />
-          </label>
-          <label>
-            사업계획 요약
-            <input
-              value={form.business_summary}
-              onChange={(e) => updateField('business_summary', e.target.value)}
-            />
-          </label>
-          {profileError && <p className="error-text">{profileError}</p>}
-          {profileSaved && <p className="hint">저장되었습니다.</p>}
-          <button type="submit" disabled={profileSaving}>
-            {profileSaving ? '저장 중...' : '프로필 저장'}
-          </button>
+        <form className="card border border-base-300 bg-base-100" onSubmit={handleProfileSubmit}>
+          <div className="card-body grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              기업명
+              <input
+                className="input w-full"
+                value={form.company_name}
+                onChange={(e) => updateField('company_name', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              사업자등록번호
+              <input
+                className="input w-full"
+                value={form.biz_registration_no}
+                onChange={(e) => updateField('biz_registration_no', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              지역
+              <input
+                className="input w-full"
+                value={form.region}
+                onChange={(e) => updateField('region', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              기업규모
+              <input
+                className="input w-full"
+                value={form.company_size}
+                onChange={(e) => updateField('company_size', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              업종코드
+              <input
+                className="input w-full"
+                value={form.industry_code}
+                onChange={(e) => updateField('industry_code', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              설립일
+              <input
+                type="date"
+                className="input w-full"
+                value={form.established_date}
+                onChange={(e) => updateField('established_date', e.target.value)}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              종업원수
+              <input
+                type="number"
+                min={0}
+                className="input w-full"
+                value={form.employee_count}
+                onChange={(e) => updateField('employee_count', Number(e.target.value))}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+              연매출(원)
+              <input
+                type="number"
+                min={0}
+                className="input w-full"
+                value={form.annual_revenue}
+                onChange={(e) => updateField('annual_revenue', Number(e.target.value))}
+                required
+              />
+            </label>
+            <label className="fieldset-label flex-col items-start gap-1.5 text-sm sm:col-span-2">
+              사업계획 요약
+              <input
+                className="input w-full"
+                value={form.business_summary}
+                onChange={(e) => updateField('business_summary', e.target.value)}
+              />
+            </label>
+            {profileError && <p className="text-sm text-error sm:col-span-2">{profileError}</p>}
+            {profileSaved && <p className="text-sm text-success sm:col-span-2">저장되었습니다.</p>}
+            <button type="submit" className="btn btn-primary mt-1 sm:col-span-2 sm:w-fit" disabled={profileSaving}>
+              {profileSaving ? '저장 중...' : '프로필 저장'}
+            </button>
+          </div>
         </form>
       )}
 
-      <h2 className="graph-subtitle section-spaced">채팅으로 수집된 기업 정보</h2>
-      <p className="hint">
+      <h2 className="mb-2 mt-8 text-lg font-semibold text-base-content">채팅으로 수집된 기업 정보</h2>
+      <p className="mb-4 text-sm text-base-content/60">
         채팅 상담 중 답변한 내용이 여기 저장되며, 다른 정책을 검토할 때도 비슷한 요건이면 다시 묻지 않고 재사용됩니다.
         틀린 내용은 직접 수정하거나 삭제할 수 있습니다.
       </p>
-      {factsError && <p className="error-text">{factsError}</p>}
+      {factsError && <p className="mb-4 text-sm text-error">{factsError}</p>}
 
-      <ul className="match-list">
+      <ul className="flex flex-col gap-3">
         {facts.map((fact) => (
-          <li key={fact.id} className="match-card">
+          <li key={fact.id} className="card border border-base-300 bg-base-100">
             {editingId === fact.id ? (
-              <div className="fact-edit-row">
+              <div className="flex items-center gap-3 px-4 py-3">
                 <input
+                  className="input input-sm flex-1"
                   value={editDraft.criterion_text}
                   onChange={(e) => setEditDraft((prev) => ({ ...prev, criterion_text: e.target.value }))}
                 />
                 <select
+                  className="select select-sm"
                   value={editDraft.answer}
                   onChange={(e) => setEditDraft((prev) => ({ ...prev, answer: e.target.value }))}
                 >
                   <option value="예">예</option>
                   <option value="아니오">아니오</option>
                 </select>
-                <button onClick={() => saveEdit(fact.id)}>저장</button>
-                <button onClick={() => setEditingId(null)}>취소</button>
+                <button className="btn btn-primary btn-sm" onClick={() => saveEdit(fact.id)}>
+                  저장
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditingId(null)}>
+                  취소
+                </button>
               </div>
             ) : (
-              <div className="fact-row">
-                <span className="fact-text">{fact.criterion_text}</span>
-                <span className={`score-badge ${fact.answer === '예' ? 'score-high' : 'score-low'}`}>
+              <div className="flex items-center gap-3 px-4 py-3">
+                <span className="flex-1 text-sm">{fact.criterion_text}</span>
+                <span className={`badge ${fact.answer === '예' ? 'badge-success' : 'badge-error'} shrink-0`}>
                   {fact.answer}
                 </span>
-                <button onClick={() => startEdit(fact)}>수정</button>
-                <button onClick={() => deleteFact(fact.id)}>삭제</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => startEdit(fact)}>
+                  수정
+                </button>
+                <button className="btn btn-ghost btn-sm text-error" onClick={() => deleteFact(fact.id)}>
+                  삭제
+                </button>
               </div>
             )}
           </li>
         ))}
-        {facts.length === 0 && <p>아직 저장된 정보가 없습니다.</p>}
+        {facts.length === 0 && <p className="text-sm text-base-content/60">아직 저장된 정보가 없습니다.</p>}
       </ul>
 
-      <form className="form-card" style={{ marginTop: 16 }} onSubmit={handleAddFact}>
-        <label>
-          새 항목 직접 추가
-          <input
-            value={newFact.criterion_text}
-            onChange={(e) => setNewFact((prev) => ({ ...prev, criterion_text: e.target.value }))}
-            placeholder="예: 설립일이 3년 이내이다"
-          />
-        </label>
-        <label>
-          답변
-          <select
-            value={newFact.answer}
-            onChange={(e) => setNewFact((prev) => ({ ...prev, answer: e.target.value }))}
-          >
-            <option value="예">예</option>
-            <option value="아니오">아니오</option>
-          </select>
-        </label>
-        <button type="submit">추가</button>
+      <form className="card mt-4 border border-base-300 bg-base-100" onSubmit={handleAddFact}>
+        <div className="card-body flex-row flex-wrap items-end gap-4">
+          <label className="fieldset-label min-w-64 flex-1 flex-col items-start gap-1.5 text-sm">
+            새 항목 직접 추가
+            <input
+              className="input w-full"
+              value={newFact.criterion_text}
+              onChange={(e) => setNewFact((prev) => ({ ...prev, criterion_text: e.target.value }))}
+              placeholder="예: 설립일이 3년 이내이다"
+            />
+          </label>
+          <label className="fieldset-label flex-col items-start gap-1.5 text-sm">
+            답변
+            <select
+              className="select"
+              value={newFact.answer}
+              onChange={(e) => setNewFact((prev) => ({ ...prev, answer: e.target.value }))}
+            >
+              <option value="예">예</option>
+              <option value="아니오">아니오</option>
+            </select>
+          </label>
+          <button type="submit" className="btn btn-primary">
+            추가
+          </button>
+        </div>
       </form>
     </main>
   )

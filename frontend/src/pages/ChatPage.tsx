@@ -63,6 +63,12 @@ function statusLabel(status: ConnectionStatus): string {
   return '연결 끊김 (재시도 중)'
 }
 
+function scoreBadgeClass(score: number): string {
+  if (score >= 70) return 'badge-success'
+  if (score >= 40) return 'badge-warning'
+  return 'badge-error'
+}
+
 export default function ChatPage() {
   const { companyId, token } = useAuth()
   const [searchParams] = useSearchParams()
@@ -166,49 +172,57 @@ export default function ChatPage() {
   }
 
   return (
-    <main className="page page-narrow">
-      <h1>맞춤 상담 채팅</h1>
+    <main className="mx-auto max-w-lg px-4 py-8">
+      <h1 className="mb-4 text-2xl font-semibold text-base-content">맞춤 상담 채팅</h1>
       {policyTitle && (
-        <p className="chat-focus-banner">
-          <strong>{policyTitle}</strong> 정책에 대해 질문에 답하고 재계산합니다.
+        <p className="mb-4 rounded-box border border-base-300 bg-base-100 px-4 py-2.5 text-sm">
+          <strong className="text-base-content">{policyTitle}</strong> 정책에 대해 질문에 답하고 재계산합니다.
         </p>
       )}
-      <p className="chat-status">연결 상태: {statusLabel(status)}</p>
-      {error && <p className="error-text">{error}</p>}
+      <p className="mb-4 text-xs text-base-content/60">연결 상태: {statusLabel(status)}</p>
+      {error && <p className="mb-4 text-sm text-error">{error}</p>}
       {question && (
-        <div className="chat-question">
-          <p>{question.text}</p>
-          <div className="chat-options">
-            {question.options.map((opt) => (
-              <button key={opt.value} onClick={() => answer(opt.value)}>
-                {opt.label}
-              </button>
-            ))}
+        <div className="card border border-base-300 bg-base-100">
+          <div className="card-body gap-4">
+            <p className="whitespace-pre-line text-sm text-base-content">{question.text}</p>
+            <div className="flex gap-3">
+              {question.options.map((opt) => (
+                <button key={opt.value} className="btn btn-primary btn-sm" onClick={() => answer(opt.value)}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
       {result && (
-        <div className="chat-result">
-          <h2>매칭 결과</h2>
-          <ul className="match-list">
+        <div>
+          <h2 className="mb-3 mt-2 text-lg font-semibold text-base-content">매칭 결과</h2>
+          <ul className="flex flex-col gap-3">
             {result.map((match) => (
-              <li key={match.policy_id} className="match-card">
-                <div className="match-card-header">
-                  <span className="match-title">{match.title}</span>
-                  <span className={`score-badge score-${match.score >= 70 ? 'high' : match.score >= 40 ? 'mid' : 'low'}`}>
+              <li key={match.policy_id} className="card border border-base-300 bg-base-100">
+                <div className="flex items-center justify-between gap-3 px-4 py-3.5">
+                  <span className="font-medium text-base-content">{match.title}</span>
+                  <span className={`badge ${scoreBadgeClass(match.score)} shrink-0 font-semibold`}>
                     {match.score}점
                   </span>
                 </div>
               </li>
             ))}
           </ul>
-          <div className="chat-result-actions">
-            <button onClick={restart}>새 상담 시작</button>
-            <Link to="/">대시보드로 돌아가기</Link>
+          <div className="mt-4 flex items-center gap-4">
+            <button className="btn btn-outline btn-sm" onClick={restart}>
+              새 상담 시작
+            </button>
+            <Link to="/" className="link link-primary text-sm">
+              대시보드로 돌아가기
+            </Link>
           </div>
         </div>
       )}
-      {!question && !result && status === 'open' && <p>매칭을 계산하는 중입니다...</p>}
+      {!question && !result && status === 'open' && (
+        <p className="text-base-content/70">매칭을 계산하는 중입니다...</p>
+      )}
     </main>
   )
 }
