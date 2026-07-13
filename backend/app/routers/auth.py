@@ -1,7 +1,7 @@
 """Auth endpoint (detailed_plan.md 6/8): MVP email/password login only -- there's
-no signup endpoint in the plan's API table, so the two mock companies
-(app/mock/demographics.py) get seeded accounts at startup (app/db/seed.py) so
-login is actually testable end to end.
+no signup endpoint in the plan's API table, so the two demo companies
+(app/services/company_profile.py) get seeded accounts at startup (app/db/seed.py)
+so login is actually testable end to end.
 """
 
 from fastapi import APIRouter, Depends, HTTPException

@@ -18,8 +18,8 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_company_scope
 from app.db.postgres import get_db
-from app.mock.demographics import get_company_demographics
 from app.models.policy import Policy
+from app.services.company_profile import get_company_demographics
 from app.services.match_results import list_match_results, save_match_results
 from app.services.orchestrator import run_full_matching, run_policy_matching
 
@@ -78,7 +78,7 @@ def get_policy_candidates(
     db: Session = Depends(get_db),
     _: str = Depends(require_company_scope),
 ) -> list[PolicyCandidateOut]:
-    company = get_company_demographics(company_id)
+    company = get_company_demographics(db, company_id)
     query_text = query or _default_query_text(company)
     candidates, graph_evidence = run_policy_matching(db, query_text, limit=limit, only_open=only_open)
 
@@ -111,7 +111,7 @@ def refresh_matches(
     db: Session = Depends(get_db),
     _: str = Depends(require_company_scope),
 ) -> list[MatchResultOut]:
-    company = get_company_demographics(company_id)
+    company = get_company_demographics(db, company_id)
     query_text = query or _default_query_text(company)
     scored_matches = run_full_matching(db, company, query_text, limit=limit, only_open=only_open)
     computed_at = save_match_results(db, company_id, scored_matches)

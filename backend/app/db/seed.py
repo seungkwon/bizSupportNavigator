@@ -1,5 +1,6 @@
-"""Seeds demo login credentials for the two mock companies (app/mock/demographics.py)
-so `/auth/login` is testable end to end without a signup endpoint (not in
+"""Seeds demo login credentials for the two demo companies (app/services/company_profile.py
+has the matching profile rows, seeded separately by seed_demo_profiles) so
+`/auth/login` is testable end to end without a signup endpoint (not in
 detailed_plan.md 8's API table). Local dev/demo only -- fixed password, not
 meant for any real deployment.
 """

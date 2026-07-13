@@ -7,12 +7,14 @@ from app.core.config import get_settings
 from app.db.migrations import run_additive_migrations
 from app.db.postgres import Base, SessionLocal, engine
 from app.db.seed import seed_demo_accounts
-from app.mock.demographics import router as demographics_router
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
+from app.routers.company_facts import router as company_facts_router
+from app.routers.demographics import router as demographics_router
 from app.routers.health import router as health_router
 from app.routers.matching import router as matching_router
 from app.routers.policies import router as policies_router
+from app.services.company_profile import seed_demo_profiles
 
 settings = get_settings()
 
@@ -25,6 +27,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_demo_accounts(db)
+        seed_demo_profiles(db)
     finally:
         db.close()
     yield
@@ -46,3 +49,4 @@ app.include_router(policies_router)
 app.include_router(matching_router)
 app.include_router(chat_router)
 app.include_router(auth_router)
+app.include_router(company_facts_router)

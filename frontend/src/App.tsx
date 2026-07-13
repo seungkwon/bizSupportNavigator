@@ -5,6 +5,7 @@ import ChatPage from './pages/ChatPage'
 import DashboardPage from './pages/DashboardPage'
 import GraphPage from './pages/GraphPage'
 import LoginPage from './pages/LoginPage'
+import ProfilePage from './pages/ProfilePage'
 
 function NavBar() {
   const { token, companyId, logout } = useAuth()
@@ -19,6 +20,7 @@ function NavBar() {
         </NavLink>
         <NavLink to="/chat">채팅 상담</NavLink>
         <NavLink to="/graph">정책 그래프</NavLink>
+        <NavLink to="/profile">기업 정보</NavLink>
       </div>
       <div className="navbar-user">
         <span>{companyId}</span>
@@ -55,6 +57,14 @@ function App() {
           element={
             <RequireAuth>
               <GraphPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/profile"
+          element={
+            <RequireAuth>
+              <ProfilePage />
             </RequireAuth>
           }
         />

@@ -1,8 +1,9 @@
 """ORM model for cached matching results (detailed_plan.md 4.6/7).
 
-`company_id` isn't a real foreign key here: company demographics are a mock
-adapter (app/mock/demographics.py) standing in for an assumed external system
-(detailed_plan.md 2.1), so there's no local `companies` table to reference yet.
+`company_id` isn't a real foreign key here: company demographics
+(app/models/company_profile.py) were originally modeled as an assumed external
+system (detailed_plan.md 2.1) this project only reads from, so no FK was added
+even after that profile got its own local table.
 """
 
 from datetime import datetime

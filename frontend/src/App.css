@@ -261,10 +261,66 @@ button:disabled {
   color: var(--text);
 }
 
+.chat-focus-banner {
+  font-size: 14px;
+  color: var(--text);
+  background: var(--social-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
 .chat-status {
   font-size: 13px;
   color: var(--text);
   margin-bottom: 16px;
+}
+
+.chat-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.match-card-actions {
+  padding: 0 16px 16px;
+}
+
+.section-spaced {
+  margin-top: 32px;
+}
+
+.fact-row,
+.fact-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.fact-text {
+  flex: 1;
+}
+
+.fact-edit-row input {
+  flex: 1;
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.fact-edit-row select {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
 }
 
 .chat-question {

@@ -31,6 +31,9 @@ olefile==0.47
 chromadb==1.5.9
 sentence-transformers==5.6.0
 langchain-huggingface==1.2.2
+# Already an indirect dep via sentence-transformers/chromadb; pinned explicitly
+# because app/services/company_facts.py imports it directly for cosine similarity.
+numpy==2.5.1
 
 # GraphRAG (Milestone 5): Neo4j driver + LangGraph orchestration (meta_filter ->
 # rag_search -> graph_reasoning, detailed_plan.md 4.5). No langchain-openai/

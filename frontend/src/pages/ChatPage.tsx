@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { API_BASE } from '../lib/api'
 import { useAuth } from '../lib/auth'
 
@@ -43,8 +44,11 @@ type ConnectionStatus = 'connecting' | 'open' | 'closed'
 const WS_BASE = API_BASE.replace(/^http/, 'ws')
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000]
 
-function getSessionId(companyId: string): string {
-  const key = `chat_session_id:${companyId}`
+function getSessionId(companyId: string, policyId: string | null): string {
+  // Scoped per target policy so opening chat from a different recommendation
+  // card starts a fresh clarification round instead of resuming/colliding
+  // with a session already focused on (or completed for) another policy.
+  const key = policyId ? `chat_session_id:${companyId}:${policyId}` : `chat_session_id:${companyId}`
   let id = localStorage.getItem(key)
   if (!id) {
     id = crypto.randomUUID()
@@ -61,6 +65,9 @@ function statusLabel(status: ConnectionStatus): string {
 
 export default function ChatPage() {
   const { companyId, token } = useAuth()
+  const [searchParams] = useSearchParams()
+  const policyId = searchParams.get('policy_id')
+  const policyTitle = searchParams.get('title')
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [question, setQuestion] = useState<QuestionMessage | null>(null)
   const [result, setResult] = useState<ChatMatch[] | null>(null)
@@ -68,7 +75,7 @@ export default function ChatPage() {
   const wsRef = useRef<WebSocket | null>(null)
   const attemptRef = useRef(0)
   const startedRef = useRef(false)
-  const sessionIdRef = useRef<string | null>(companyId ? getSessionId(companyId) : null)
+  const sessionIdRef = useRef<string | null>(companyId ? getSessionId(companyId, policyId) : null)
 
   const connect = useCallback(() => {
     if (!companyId || !token) return
@@ -84,7 +91,13 @@ export default function ChatPage() {
       attemptRef.current = 0
       if (!startedRef.current) {
         startedRef.current = true
-        ws.send(JSON.stringify({ type: 'start', company_id: companyId }))
+        ws.send(
+          JSON.stringify({
+            type: 'start',
+            company_id: companyId,
+            ...(policyId ? { policy_id: policyId } : {}),
+          }),
+        )
       }
     }
 
@@ -112,7 +125,19 @@ export default function ChatPage() {
     }
 
     ws.onerror = () => ws.close()
-  }, [companyId, token])
+  }, [companyId, token, policyId])
+
+  useEffect(() => {
+    // Navigating between recommendation cards keeps this component mounted but
+    // changes `policyId` -- switch to that policy's own session before the
+    // connect effect below tears down and re-opens the socket.
+    if (!companyId) return
+    sessionIdRef.current = getSessionId(companyId, policyId)
+    startedRef.current = false
+    setQuestion(null)
+    setResult(null)
+    setError(null)
+  }, [companyId, policyId])
 
   useEffect(() => {
     connect()
@@ -130,8 +155,9 @@ export default function ChatPage() {
 
   function restart() {
     if (!companyId) return
-    localStorage.removeItem(`chat_session_id:${companyId}`)
-    sessionIdRef.current = getSessionId(companyId)
+    const key = policyId ? `chat_session_id:${companyId}:${policyId}` : `chat_session_id:${companyId}`
+    localStorage.removeItem(key)
+    sessionIdRef.current = getSessionId(companyId, policyId)
     startedRef.current = false
     setQuestion(null)
     setResult(null)
@@ -142,6 +168,11 @@ export default function ChatPage() {
   return (
     <main className="page page-narrow">
       <h1>맞춤 상담 채팅</h1>
+      {policyTitle && (
+        <p className="chat-focus-banner">
+          <strong>{policyTitle}</strong> 정책에 대해 질문에 답하고 재계산합니다.
+        </p>
+      )}
       <p className="chat-status">연결 상태: {statusLabel(status)}</p>
       {error && <p className="error-text">{error}</p>}
       {question && (
@@ -171,7 +202,10 @@ export default function ChatPage() {
               </li>
             ))}
           </ul>
-          <button onClick={restart}>새 상담 시작</button>
+          <div className="chat-result-actions">
+            <button onClick={restart}>새 상담 시작</button>
+            <Link to="/">대시보드로 돌아가기</Link>
+          </div>
         </div>
       )}
       {!question && !result && status === 'open' && <p>매칭을 계산하는 중입니다...</p>}

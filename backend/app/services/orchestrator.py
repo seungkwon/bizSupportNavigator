@@ -1,8 +1,8 @@
 """LangGraph orchestrator wiring the full detailed_plan.md 4.5 pipeline:
 meta_filter -> rag_search -> graph_reasoning -> llm_judge -> score_aggregate.
 `load_company_profile` (step 1) stays the router's job -- it's a plain
-mock-adapter call (app/mock/demographics.py), not something that benefits from
-graph state. `ask_clarification` (step 7, conditional on missing information)
+repository call (app/services/company_profile.py), not something that benefits
+from graph state. `ask_clarification` (step 7, conditional on missing information)
 is Milestone 7's chat/WebSocket flow; for now, missing information simply
 surfaces as a "정보부족" reason (app/services/llm_judge.py) instead of pausing
 the graph.
@@ -18,7 +18,7 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.orm import Session
 
-from app.mock.demographics import CompanyDemographics
+from app.services.company_profile import CompanyDemographics
 from app.services.graph_reasoning import PolicyGraphEvidence, fetch_graph_evidence
 from app.services.llm_judge import CriterionJudgment, judge_policy
 from app.services.matching import PolicyCandidate, meta_filter_policy_ids, rag_search_candidates

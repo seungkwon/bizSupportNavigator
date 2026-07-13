@@ -1,7 +1,12 @@
 """Milestone 7 chat WebSocket (detailed_plan.md 5/8): `/ws/chat/{session_id}`.
 
 Protocol (detailed_plan.md 5):
-  client -> server: {"type": "start", "company_id": "...", "query": "..."?, "limit": 10?, "only_open": true?}
+  client -> server: {"type": "start", "company_id": "...", "query": "..."?, "limit": 10?, "only_open": true?, "policy_id": "..."?}
+  # "policy_id" (dashboard "이 정책 재확인" flow): when set, clarification questions
+  # focus on that specific policy instead of the RAG top rank (see
+  # app/services/chat_service.py::_resolve_focus_candidate), so a policy the user
+  # clicked into from the recommendation list always gets asked about even if it
+  # wasn't the #1 match for the generic query text.
   client -> server: {"type": "answer", "question_id": "q1", "value": "yes"|"no"}
   server -> client: {"type": "question", "question_id": "q1", "text": "...", "options": [...]}
   server -> client: {"type": "result", "matches": [...]}
@@ -51,6 +56,7 @@ async def _handle_start(db: DbSession, session_id: str, data: dict, authenticate
         query_text=data.get("query"),
         limit=data.get("limit", 10),
         only_open=data.get("only_open", True),
+        target_policy_id=data.get("policy_id"),
     )
     return await asyncio.to_thread(advance_session, db, session)
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { apiFetch, ApiError } from '../lib/api'
 import { useAuth } from '../lib/auth'
 
@@ -77,6 +78,7 @@ function ProfileCard({ profile }: { profile: CompanyProfile }) {
 
 export default function DashboardPage() {
   const { companyId } = useAuth()
+  const navigate = useNavigate()
   const [profile, setProfile] = useState<CompanyProfile | null>(null)
   const [matches, setMatches] = useState<MatchResult[]>([])
   const [loading, setLoading] = useState(false)
@@ -149,15 +151,28 @@ export default function DashboardPage() {
                 <span className={`score-badge score-${scoreTier(match.score)}`}>{match.score}점</span>
               </button>
               {expanded === match.policy_id && (
-                <ul className="reason-list">
-                  {match.reasons.map((reason, i) => (
-                    <li key={i} className={`reason-item status-${reason.status}`}>
-                      <span className="reason-status">{reason.status}</span>
-                      <span className="reason-criterion">{reason.criterion}</span>
-                      {reason.evidence && <p className="reason-evidence">{reason.evidence}</p>}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="reason-list">
+                    {match.reasons.map((reason, i) => (
+                      <li key={i} className={`reason-item status-${reason.status}`}>
+                        <span className="reason-status">{reason.status}</span>
+                        <span className="reason-criterion">{reason.criterion}</span>
+                        {reason.evidence && <p className="reason-evidence">{reason.evidence}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="match-card-actions">
+                    <button
+                      onClick={() =>
+                        navigate(
+                          `/chat?policy_id=${encodeURIComponent(match.policy_id)}&title=${encodeURIComponent(match.title)}`,
+                        )
+                      }
+                    >
+                      이 정책에 대해 질문 답하고 재계산
+                    </button>
+                  </div>
+                </>
               )}
             </li>
           ))}

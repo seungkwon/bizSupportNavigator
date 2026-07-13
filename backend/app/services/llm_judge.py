@@ -21,7 +21,7 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.mock.demographics import CompanyDemographics
+from app.services.company_profile import CompanyDemographics
 from app.services.graph_reasoning import PolicyGraphEvidence
 from app.services.matching import PolicyCandidate
 
@@ -66,6 +66,16 @@ def _build_items(evidence: PolicyGraphEvidence) -> list[tuple[str, str, bool]]:
     for index, criterion in enumerate(evidence.exclusion_criteria):
         items.append((f"excl:{index}", f"{criterion.description}에 해당하지 않음", True))
     return items
+
+
+def criterion_statements(evidence: PolicyGraphEvidence) -> list[str]:
+    """The plain-text criterion statements `judge_policy` will judge for this
+    policy -- exposed so callers (app/services/chat_service.py) can look up
+    which previously-collected company facts (app/services/company_facts.py)
+    are relevant *before* calling judge_policy, since `extra_facts` is an input
+    to that call, not an output.
+    """
+    return [statement for _, statement, _ in _build_items(evidence)]
 
 
 def _fallback(items: list[tuple[str, str, bool]]) -> list[CriterionJudgment]:
