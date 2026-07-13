@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { API_BASE } from '../lib/api'
 import { useAuth } from '../lib/auth'
 
@@ -8,17 +8,22 @@ interface ChatOption {
   value: string
 }
 
-interface QuestionMessage {
-  type: 'question'
+interface QuestionItem {
   question_id: string
   text: string
   options: ChatOption[]
+}
+
+interface QuestionBatchMessage {
+  type: 'question_batch'
+  questions: QuestionItem[]
 }
 
 interface MatchReason {
   criterion: string
   status: string
   evidence: string | null
+  confirmed: boolean
 }
 
 interface ChatMatch {
@@ -38,7 +43,7 @@ interface ErrorMessage {
   message: string
 }
 
-type ServerMessage = QuestionMessage | ResultMessage | ErrorMessage
+type ServerMessage = QuestionBatchMessage | ResultMessage | ErrorMessage
 type ConnectionStatus = 'connecting' | 'open' | 'closed'
 
 const WS_BASE = API_BASE.replace(/^http/, 'ws')
@@ -69,19 +74,35 @@ function scoreBadgeClass(score: number): string {
   return 'badge-error'
 }
 
+function reasonBadgeClass(reason: MatchReason): string {
+  if (reason.status === '충족') return 'badge-success'
+  if (reason.status === '미충족') return reason.confirmed ? 'badge-error' : 'badge-warning'
+  return 'badge-neutral'
+}
+
+function reasonStatusLabel(reason: MatchReason): string {
+  if (reason.status === '미충족' && reason.confirmed) return '미충족 확정'
+  return reason.status
+}
+
 export default function ChatPage() {
   const { companyId, token } = useAuth()
+  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const policyId = searchParams.get('policy_id')
   const policyTitle = searchParams.get('title')
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
-  const [question, setQuestion] = useState<QuestionMessage | null>(null)
+  const [questions, setQuestions] = useState<QuestionItem[] | null>(null)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [waitingPhase, setWaitingPhase] = useState<'checking' | 'recalculating'>('checking')
   const [result, setResult] = useState<ChatMatch[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const attemptRef = useRef(0)
   const startedRef = useRef(false)
   const sessionIdRef = useRef<string | null>(companyId ? getSessionId(companyId, policyId) : null)
+  const focusMatch = result?.find((match) => match.policy_id === policyId) ?? null
+  const otherMatches = result ? result.filter((match) => match.policy_id !== policyId) : []
 
   const connect = useCallback(() => {
     if (!companyId || !token) return
@@ -109,13 +130,14 @@ export default function ChatPage() {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data) as ServerMessage
-      if (data.type === 'question') {
-        setQuestion(data)
+      if (data.type === 'question_batch') {
+        setQuestions(data.questions)
+        setAnswers({})
         setResult(null)
         setError(null)
       } else if (data.type === 'result') {
         setResult(data.matches)
-        setQuestion(null)
+        setQuestions(null)
         setError(null)
       } else {
         setError(data.message)
@@ -140,7 +162,9 @@ export default function ChatPage() {
     if (!companyId) return
     sessionIdRef.current = getSessionId(companyId, policyId)
     startedRef.current = false
-    setQuestion(null)
+    setQuestions(null)
+    setAnswers({})
+    setWaitingPhase('checking')
     setResult(null)
     setError(null)
   }, [companyId, policyId])
@@ -153,10 +177,17 @@ export default function ChatPage() {
     }
   }, [connect])
 
-  function answer(value: string) {
-    if (!question || wsRef.current?.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({ type: 'answer', question_id: question.question_id, value }))
-    setQuestion(null)
+  function selectAnswer(questionId: string, value: string) {
+    setAnswers((prev) => ({ ...prev, [questionId]: value }))
+  }
+
+  function submitAnswers() {
+    if (!questions || wsRef.current?.readyState !== WebSocket.OPEN) return
+    const payload = questions.map((q) => ({ question_id: q.question_id, value: answers[q.question_id] }))
+    wsRef.current.send(JSON.stringify({ type: 'answer_batch', answers: payload }))
+    setQuestions(null)
+    setAnswers({})
+    setWaitingPhase('recalculating')
   }
 
   function restart() {
@@ -165,7 +196,9 @@ export default function ChatPage() {
     localStorage.removeItem(key)
     sessionIdRef.current = getSessionId(companyId, policyId)
     startedRef.current = false
-    setQuestion(null)
+    setQuestions(null)
+    setAnswers({})
+    setWaitingPhase('checking')
     setResult(null)
     setError(null)
     wsRef.current?.close()
@@ -181,35 +214,98 @@ export default function ChatPage() {
       )}
       <p className="mb-4 text-xs text-base-content/60">연결 상태: {statusLabel(status)}</p>
       {error && <p className="mb-4 text-sm text-error">{error}</p>}
-      {question && (
-        <div className="card border border-base-300 bg-base-100">
-          <div className="card-body gap-4">
-            <p className="whitespace-pre-line text-sm text-base-content">{question.text}</p>
-            <div className="flex gap-3">
-              {question.options.map((opt) => (
-                <button key={opt.value} className="btn btn-primary btn-sm" onClick={() => answer(opt.value)}>
-                  {opt.label}
-                </button>
-              ))}
+      {questions && questions.length > 0 && (
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-base-content/70">
+            아래 {questions.length}개 질문에 모두 답한 뒤 제출해주세요.
+          </p>
+          {questions.map((q) => (
+            <div key={q.question_id} className="card border border-base-300 bg-base-100">
+              <div className="card-body gap-4">
+                <p className="whitespace-pre-line text-sm text-base-content">{q.text}</p>
+                <div className="flex gap-3">
+                  {q.options.map((opt) => (
+                    <button
+                      key={opt.value}
+                      className={`btn btn-sm ${
+                        answers[q.question_id] === opt.value ? 'btn-primary' : 'btn-outline btn-primary'
+                      }`}
+                      onClick={() => selectAnswer(q.question_id, opt.value)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
+          <button
+            className="btn btn-primary self-start"
+            disabled={questions.some((q) => !answers[q.question_id])}
+            onClick={submitAnswers}
+          >
+            답변 제출 ({Object.keys(answers).length}/{questions.length})
+          </button>
         </div>
       )}
       {result && (
         <div>
-          <h2 className="mb-3 mt-2 text-lg font-semibold text-base-content">매칭 결과</h2>
-          <ul className="flex flex-col gap-3">
-            {result.map((match) => (
-              <li key={match.policy_id} className="card border border-base-300 bg-base-100">
-                <div className="flex items-center justify-between gap-3 px-4 py-3.5">
-                  <span className="font-medium text-base-content">{match.title}</span>
-                  <span className={`badge ${scoreBadgeClass(match.score)} shrink-0 font-semibold`}>
-                    {match.score}점
-                  </span>
+          {focusMatch && (
+            <div className="mb-6">
+              <h2 className="mb-3 mt-2 text-lg font-semibold text-base-content">
+                {policyTitle ?? focusMatch.title} 매칭 결과
+              </h2>
+              <div className="card border border-primary bg-base-100">
+                <div className="card-body gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-base-content">{focusMatch.title}</span>
+                    <span className={`badge ${scoreBadgeClass(focusMatch.score)} shrink-0 font-semibold`}>
+                      {focusMatch.score}점
+                    </span>
+                  </div>
+                  <ul className="flex flex-col gap-2.5 border-t border-base-300 pt-3">
+                    {focusMatch.reasons.map((reason, i) => (
+                      <li key={i} className="text-sm">
+                        <span className={`badge badge-sm ${reasonBadgeClass(reason)} mr-2`}>
+                          {reasonStatusLabel(reason)}
+                        </span>
+                        <span>{reason.criterion}</span>
+                        {reason.evidence && <p className="mt-1 text-xs text-base-content/60">{reason.evidence}</p>}
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-              </li>
-            ))}
-          </ul>
+              </div>
+            </div>
+          )}
+          {otherMatches.length > 0 && (
+            <>
+              <h2 className="mb-3 mt-2 text-lg font-semibold text-base-content">
+                {focusMatch ? '다른 추천 정책' : '매칭 결과'}
+              </h2>
+              <ul className="flex flex-col gap-3">
+                {otherMatches.map((match) => (
+                  <li key={match.policy_id} className="card border border-base-300 bg-base-100">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
+                      title="클릭하면 이 정책으로 상담을 이어갑니다"
+                      onClick={() =>
+                        navigate(
+                          `/chat?policy_id=${encodeURIComponent(match.policy_id)}&title=${encodeURIComponent(match.title)}`,
+                        )
+                      }
+                    >
+                      <span className="font-medium text-base-content">{match.title}</span>
+                      <span className={`badge ${scoreBadgeClass(match.score)} shrink-0 font-semibold`}>
+                        {match.score}점
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <div className="mt-4 flex items-center gap-4">
             <button className="btn btn-outline btn-sm" onClick={restart}>
               새 상담 시작
@@ -220,8 +316,18 @@ export default function ChatPage() {
           </div>
         </div>
       )}
-      {!question && !result && status === 'open' && (
-        <p className="text-base-content/70">매칭을 계산하는 중입니다...</p>
+      {!questions && !result && status === 'open' && (
+        <div>
+          <p className="mb-3 flex items-center gap-2 text-base-content/70">
+            <span className="loading loading-spinner loading-xs" />
+            {waitingPhase === 'checking'
+              ? '확인할 질문이 있는지 확인하는 중입니다...'
+              : '답변을 반영해서 재계산하는 중입니다... (수십 초 소요될 수 있음)'}
+          </p>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-base-300">
+            <div className="indeterminate-bar h-full w-1/3 rounded-full bg-primary" />
+          </div>
+        </div>
       )}
     </main>
   )

@@ -29,6 +29,11 @@ class MatchReason:
     criterion: str
     status: str
     evidence: str | None
+    # True when a 미충족 judgment was directly confirmed by the user answering
+    # a chat question ("아니오"), not just inferred by the LLM from RAG
+    # evidence -- app/services/chat_service.py sets this after scoring, since
+    # it needs the company's fact history to know. Always False for 충족/정보부족.
+    confirmed: bool = False
 
 
 @dataclass

@@ -114,3 +114,45 @@ def relevant_facts_for(index: FactIndex | None, criteria_texts: list[str]) -> li
         for fact, score in zip(index.facts, best_similarity)
         if score >= _SIMILARITY_THRESHOLD
     ]
+
+
+def unresolved_criteria(index: FactIndex | None, criteria_texts: list[str]) -> list[str]:
+    """The subset of criteria_texts that no existing company fact already
+    answers -- same similarity check as relevant_facts_for, just reporting
+    which criteria remain open instead of which facts matched. Used to
+    double-check a cached, possibly-stale 정보부족 list (app/services/
+    chat_service.py::_cached_pending_questions) locally, without an LLM call.
+    """
+    if index is None or not criteria_texts:
+        return list(criteria_texts)
+
+    criteria_vectors = np.array(get_embedder().embed_documents(criteria_texts))
+    fact_norms = np.linalg.norm(index.vectors, axis=1, keepdims=True)
+    criteria_norms = np.linalg.norm(criteria_vectors, axis=1, keepdims=True)
+    similarity = (index.vectors @ criteria_vectors.T) / (fact_norms @ criteria_norms.T)
+    best_similarity = similarity.max(axis=0)
+
+    return [text for text, score in zip(criteria_texts, best_similarity) if score < _SIMILARITY_THRESHOLD]
+
+
+def confirmed_negative_criteria(index: FactIndex | None, criteria_texts: list[str]) -> set[str]:
+    """Which of these criteria have a matching company fact answered '아니오'
+    (embedding similarity, no LLM call) -- used to mark a 미충족 judgment as
+    directly confirmed by the user rather than merely inferred by the LLM from
+    RAG evidence (app/services/chat_service.py, MatchReason.confirmed).
+    """
+    if index is None or not criteria_texts:
+        return set()
+
+    criteria_vectors = np.array(get_embedder().embed_documents(criteria_texts))
+    fact_norms = np.linalg.norm(index.vectors, axis=1, keepdims=True)
+    criteria_norms = np.linalg.norm(criteria_vectors, axis=1, keepdims=True)
+    similarity = (index.vectors @ criteria_vectors.T) / (fact_norms @ criteria_norms.T)
+    best_fact_idx = similarity.argmax(axis=0)
+    best_similarity = similarity.max(axis=0)
+
+    return {
+        text
+        for i, text in enumerate(criteria_texts)
+        if best_similarity[i] >= _SIMILARITY_THRESHOLD and index.facts[best_fact_idx[i]].answer == "아니오"
+    }

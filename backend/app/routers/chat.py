@@ -7,10 +7,15 @@ Protocol (detailed_plan.md 5):
   # app/services/chat_service.py::_resolve_focus_candidate), so a policy the user
   # clicked into from the recommendation list always gets asked about even if it
   # wasn't the #1 match for the generic query text.
-  client -> server: {"type": "answer", "question_id": "q1", "value": "yes"|"no"}
-  server -> client: {"type": "question", "question_id": "q1", "text": "...", "options": [...]}
+  client -> server: {"type": "answer_batch", "answers": [{"question_id": "q1", "value": "yes"|"no"}, ...]}
+  server -> client: {"type": "question_batch", "questions": [{"question_id": "q1", "text": "...", "options": [...]}, ...]}
   server -> client: {"type": "result", "matches": [...]}
   server -> client: {"type": "error", "message": "..."}
+  # All of the focus policy's still-unresolved criteria for the current round
+  # arrive together in one question_batch (see app/services/chat_service.py's
+  # module docstring) -- the client answers every question locally and sends
+  # them all back in a single answer_batch instead of one round-trip per
+  # question.
 
 A plain `SessionLocal()` is used instead of the `Depends(get_db)` REST pattern:
 a WebSocket connection is long-lived and spans many independent commits (one
@@ -38,7 +43,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.core.security import decode_company_id
 from app.db.postgres import SessionLocal
-from app.services.chat_service import advance_session, create_session, get_session, record_answer, resume_payload
+from app.services.chat_service import advance_session, create_session, get_session, record_answers, resume_payload
 
 router = APIRouter(tags=["chat"])
 
@@ -61,13 +66,13 @@ async def _handle_start(db: DbSession, session_id: str, data: dict, authenticate
     return await asyncio.to_thread(advance_session, db, session)
 
 
-async def _handle_answer(db: DbSession, session_id: str, data: dict, authenticated_company_id: str) -> dict:
+async def _handle_answer_batch(db: DbSession, session_id: str, data: dict, authenticated_company_id: str) -> dict:
     session = get_session(db, session_id)
     if session is None:
         return {"type": "error", "message": "세션이 시작되지 않았습니다 (type=start 먼저 전송)"}
     if session.company_id != authenticated_company_id:
         return _WRONG_COMPANY
-    await asyncio.to_thread(record_answer, db, session, data["question_id"], data["value"])
+    await asyncio.to_thread(record_answers, db, session, data["answers"])
     return await asyncio.to_thread(advance_session, db, session)
 
 
@@ -106,8 +111,8 @@ async def chat_ws(websocket: WebSocket, session_id: str) -> None:
 
             if message_type == "start":
                 payload = await _handle_start(db, session_id, data, authenticated_company_id)
-            elif message_type == "answer":
-                payload = await _handle_answer(db, session_id, data, authenticated_company_id)
+            elif message_type == "answer_batch":
+                payload = await _handle_answer_batch(db, session_id, data, authenticated_company_id)
             else:
                 payload = {"type": "error", "message": f"알 수 없는 메시지 타입: {message_type}"}
 

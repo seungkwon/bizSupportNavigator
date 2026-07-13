@@ -25,9 +25,6 @@ function NavBar() {
         <NavLink to="/" end className={navLinkClass}>
           매칭 대시보드
         </NavLink>
-        <NavLink to="/chat" className={navLinkClass}>
-          채팅 상담
-        </NavLink>
         <NavLink to="/graph" className={navLinkClass}>
           정책 그래프
         </NavLink>

@@ -8,13 +8,18 @@ pause -- that needs an async Postgres checkpointer package not otherwise used
 in this project, and our "graph" is cheap enough (a handful of candidates, one
 clarification round at a time) to just re-run meta_filter/rag_search/
 graph_reasoning/llm_judge each turn. `langgraph_state` is a plain JSON
-snapshot of *our own* control state (query params, collected facts, the one
-pending question, round count) -- not LangGraph's internal checkpoint format.
+snapshot of *our own* control state (query params, collected facts, the
+pending questions, round count) -- not LangGraph's internal checkpoint format.
 
 Scope decision: clarifying questions are only asked about one "focus" policy at
 a time -- the top RAG-ranked candidate by default, or a specific policy the
 user picked from a dashboard recommendation card (`target_policy_id` on
-`create_session`, see `_resolve_focus_candidate`) -- one question at a time.
+`create_session`, see `_resolve_focus_candidate`). All of that policy's
+still-unresolved criteria for the current round are sent together as one
+`question_batch` rather than trickled out one question per round-trip --
+`judge_policy` already judges every criterion for a candidate in a single LLM
+call, so there is nothing to gain from asking them one at a time, and batching
+means the whole round is answered locally before the next network round-trip.
 Untargeted (general chat entry point), this is capped at `_MAX_ROUNDS`: asking
 about every candidate's every unclear criterion would make for an exhausting
 chat when the user hasn't said which policy they actually care about. But once
@@ -32,7 +37,7 @@ wrapped in `sqlalchemy.ext.mutable.MutableDict`) must be followed by
 `flag_modified(session, "langgraph_state")` before commit -- confirmed by
 testing that without it, SQLAlchemy sees `session.langgraph_state = state`
 where `state is session.langgraph_state` already and treats it as a no-op, so
-the mutated dict (a new pending_question, an appended fact) silently never
+the mutated dict (new pending_questions, an appended fact) silently never
 reaches Postgres.
 
 Answers are *not* kept in `langgraph_state` (session/policy-scoped) -- an
@@ -48,17 +53,27 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.chat import ChatMessage, ChatSession
-from app.services.company_facts import FactIndex, load_fact_index, relevant_facts_for, save_fact
+from app.models.match_result import MatchResult
+from app.models.policy import Policy
+from app.services.company_facts import (
+    FactIndex,
+    confirmed_negative_criteria,
+    load_fact_index,
+    relevant_facts_for,
+    save_fact,
+    unresolved_criteria,
+)
 from app.services.company_profile import CompanyDemographics, get_company_demographics
 from app.services.graph_reasoning import PolicyGraphEvidence, fetch_graph_evidence
 from app.services.llm_judge import criterion_statements, judge_policy
 from app.services.match_results import list_match_results, save_match_results
 from app.services.matching import PolicyCandidate, meta_filter_policy_ids, rag_search_candidates
-from app.services.score_aggregate import aggregate_score
+from app.services.score_aggregate import MatchReason, ScoredMatch, aggregate_score
 
 _MAX_ROUNDS = 3
 _YES_NO_OPTIONS = [{"label": "예", "value": "yes"}, {"label": "아니오", "value": "no"}]
@@ -91,7 +106,7 @@ def create_session(
         # the general chat entry point -- see advance_session's focus_candidate.
         "target_policy_id": target_policy_id,
         "asked_criteria": [],
-        "pending_question": None,
+        "pending_questions": [],
         "rounds": 0,
         "status": "collecting",
     }
@@ -110,34 +125,41 @@ def create_session(
     return session
 
 
-def record_answer(db: Session, session: ChatSession, question_id: str, value: str) -> None:
+def record_answers(db: Session, session: ChatSession, answers: list[dict]) -> None:
+    """Records a whole batch of answers at once (all questions from the most
+    recent advance_session call are answered together, not one round-trip per
+    question -- see advance_session's pending_questions).
+    """
     state = session.langgraph_state
-    pending = state.get("pending_question")
-    if pending is None or pending["question_id"] != question_id:
-        return
+    pending_by_id = {q["question_id"]: q for q in state.get("pending_questions", [])}
+    for item in answers:
+        pending = pending_by_id.get(item.get("question_id"))
+        if pending is None:
+            continue
+        answer_label = "예" if item.get("value") == "yes" else "아니오"
+        save_fact(db, session.company_id, pending["criterion_text"], answer_label, pending["policy_id"])
+        state["asked_criteria"].append(f"{pending['policy_id']}::{pending['criterion_text']}")
+        _log_message(db, session.session_id, "user", answer_label, options=None)
 
-    answer_label = "예" if value == "yes" else "아니오"
-    save_fact(db, session.company_id, pending["criterion_text"], answer_label, pending["policy_id"])
-    state["asked_criteria"].append(f"{pending['policy_id']}::{pending['criterion_text']}")
-    state["pending_question"] = None
+    state["pending_questions"] = []
     state["rounds"] += 1
     session.langgraph_state = state
     flag_modified(session, "langgraph_state")
     session.updated_at = datetime.now(timezone.utc)
-    _log_message(db, session.session_id, "user", answer_label, options=None)
     db.commit()
+
+
+def _serialize_pending_questions(pending_questions: list[dict]) -> list[dict]:
+    return [
+        {"question_id": q["question_id"], "text": q["text"], "options": _YES_NO_OPTIONS} for q in pending_questions
+    ]
 
 
 def resume_payload(db: Session, session: ChatSession) -> dict | None:
     state = session.langgraph_state
-    pending = state.get("pending_question")
-    if state["status"] == "collecting" and pending:
-        return {
-            "type": "question",
-            "question_id": pending["question_id"],
-            "text": pending["text"],
-            "options": _YES_NO_OPTIONS,
-        }
+    pending_questions = state.get("pending_questions") or []
+    if state["status"] == "collecting" and pending_questions:
+        return {"type": "question_batch", "questions": _serialize_pending_questions(pending_questions)}
     if state["status"] == "completed":
         return {"type": "result", "matches": _serialize_cached(db, session.company_id)}
     return None
@@ -177,6 +199,180 @@ def _judge_with_company_facts(
     return judge_policy(company, candidate, evidence, extra_facts=extra_facts)
 
 
+# 정보부족 (no evidence either way) obviously needs a question. 미충족 (LLM judged
+# it as not met) is also asked -- that judgment came from RAG evidence/graph
+# criteria without the user confirming it, so it can be a false negative; a
+# direct yes/no from the user is more reliable than trusting the inference.
+# 충족 is not re-asked -- there's nothing to correct in the company's favor.
+_NEEDS_CONFIRMATION = {"정보부족", "미충족"}
+
+
+def _cached_pending_questions(
+    db: Session, session: ChatSession, focus_policy_id: str, fact_index: FactIndex | None
+) -> list[dict] | None:
+    """On a targeted chat's first round, the dashboard/last recalculation
+    already judged this exact policy -- that score is why the user clicked
+    into chat about it. Reuse those cached reasons as this round's question
+    batch instead of spending an OpenAI call re-deriving the same judgments.
+    Each candidate criterion is still cross-checked against company_facts
+    locally (embedding similarity, no LLM call) in case a fact was recorded
+    since the cache was computed, so nothing already-answered gets re-asked.
+    Returns None (caller falls back to a live judge_policy call) if there's no
+    cached result for this policy yet.
+    """
+    cached = db.execute(
+        select(MatchResult).where(MatchResult.company_id == session.company_id, MatchResult.policy_id == focus_policy_id)
+    ).scalar_one_or_none()
+    if cached is None:
+        return None
+
+    state = session.langgraph_state
+    candidate_criteria = [
+        reason["criterion"]
+        for reason in cached.reasons
+        if reason["status"] in _NEEDS_CONFIRMATION
+        and f"{focus_policy_id}::{reason['criterion']}" not in state["asked_criteria"]
+    ]
+    if not candidate_criteria:
+        return None
+
+    still_open = unresolved_criteria(fact_index, candidate_criteria)
+    return [
+        {
+            "question_id": f"q{index + 1}",
+            "policy_id": focus_policy_id,
+            "criterion_text": criterion,
+            "text": f"다음 사항에 해당하십니까?\n\n{criterion}",
+        }
+        for index, criterion in enumerate(still_open)
+    ]
+
+
+def _build_pending_questions(
+    db: Session,
+    session: ChatSession,
+    company: CompanyDemographics,
+    focus_candidate: PolicyCandidate,
+    graph_evidence: dict[str, PolicyGraphEvidence],
+    fact_index: FactIndex | None,
+) -> list[dict]:
+    state = session.langgraph_state
+    if state["rounds"] == 0:
+        cached = _cached_pending_questions(db, session, focus_candidate.policy_id, fact_index)
+        if cached is not None:
+            return cached
+
+    evidence = graph_evidence.get(focus_candidate.policy_id)
+    if evidence is None:
+        return []
+    judgments = _judge_with_company_facts(company, focus_candidate, evidence, fact_index)
+    return [
+        {
+            "question_id": f"q{index + 1}",
+            "policy_id": focus_candidate.policy_id,
+            "criterion_text": judgment.criterion,
+            "text": f"다음 사항에 해당하십니까?\n\n{judgment.criterion}",
+        }
+        for index, judgment in enumerate(
+            j
+            for j in judgments
+            if j.status in _NEEDS_CONFIRMATION
+            and f"{focus_candidate.policy_id}::{j.criterion}" not in state["asked_criteria"]
+        )
+    ]
+
+
+def _score_candidates(
+    db: Session,
+    session: ChatSession,
+    company: CompanyDemographics,
+    candidates: list[PolicyCandidate],
+    focus_candidate: PolicyCandidate | None,
+    graph_evidence: dict[str, PolicyGraphEvidence],
+    fact_index: FactIndex | None,
+) -> list[ScoredMatch]:
+    """Re-judges only candidates that could plausibly have changed. A
+    candidate whose cached score already has every criterion resolved (no
+    정보부족/미충족 left) cannot change from anything just answered -- 충족 is
+    final, and there's no unresolved item for a new fact to affect -- so
+    re-judging it would spend an OpenAI call to reproduce the same result.
+    Only the focus candidate (this round's answers are about it) and
+    candidates with something still open are re-judged; everything else
+    reuses its cached score/reasons.
+    """
+    if not candidates:
+        return []
+
+    cached_by_policy = {
+        result.policy_id: result
+        for result in db.execute(
+            select(MatchResult).where(
+                MatchResult.company_id == session.company_id,
+                MatchResult.policy_id.in_([c.policy_id for c in candidates]),
+            )
+        ).scalars()
+    }
+
+    def _needs_rejudge(candidate: PolicyCandidate) -> bool:
+        if focus_candidate is not None and candidate.policy_id == focus_candidate.policy_id:
+            return True
+        cached = cached_by_policy.get(candidate.policy_id)
+        if cached is None:
+            return True
+        return any(reason["status"] in _NEEDS_CONFIRMATION for reason in cached.reasons)
+
+    to_rejudge = [c for c in candidates if _needs_rejudge(c)]
+    # Same rationale as orchestrator.py::_llm_judge -- one OpenAI call per
+    # candidate, independent and I/O-bound, so run them concurrently.
+    fresh_by_policy: dict[str, ScoredMatch] = {}
+    if to_rejudge:
+        with ThreadPoolExecutor(max_workers=len(to_rejudge)) as executor:
+            futures = [
+                (
+                    candidate,
+                    executor.submit(
+                        _judge_with_company_facts,
+                        company,
+                        candidate,
+                        graph_evidence.get(candidate.policy_id),
+                        fact_index,
+                    ),
+                )
+                for candidate in to_rejudge
+            ]
+            fresh_by_policy = {
+                candidate.policy_id: aggregate_score(candidate.policy_id, candidate.title, future.result())
+                for candidate, future in futures
+            }
+
+    scored = []
+    for candidate in candidates:
+        if candidate.policy_id in fresh_by_policy:
+            scored.append(fresh_by_policy[candidate.policy_id])
+        else:
+            cached = cached_by_policy[candidate.policy_id]
+            scored.append(
+                ScoredMatch(
+                    policy_id=candidate.policy_id,
+                    title=candidate.title,
+                    score=cached.score,
+                    reasons=[MatchReason(**reason) for reason in cached.reasons],
+                )
+            )
+
+    # Mark which 미충족 judgments the user directly confirmed (answered "아니오"
+    # to a chat question) rather than the LLM merely inferring it from RAG
+    # evidence -- frontend shows these with a distinct label/color.
+    negative_criteria = [reason.criterion for match in scored for reason in match.reasons if reason.status == "미충족"]
+    confirmed = confirmed_negative_criteria(fact_index, negative_criteria)
+    for match in scored:
+        for reason in match.reasons:
+            if reason.status == "미충족" and reason.criterion in confirmed:
+                reason.confirmed = True
+
+    return scored
+
+
 def advance_session(db: Session, session: ChatSession) -> dict:
     state = session.langgraph_state
     company = get_company_demographics(db, session.company_id)
@@ -189,65 +385,36 @@ def advance_session(db: Session, session: ChatSession) -> dict:
     # Untargeted (general chat, no specific recommendation card clicked), cap
     # rounds to avoid an exhausting chat about a candidate the user never
     # asked about. Targeted (detailed_plan.md 12.2 dashboard flow), ask about
-    # every one of that policy's 정보부족 criteria -- the loop below already
-    # terminates on its own once none remain (tracked in asked_criteria).
+    # every one of that policy's 정보부족/미충족 criteria -- the loop below
+    # already terminates on its own once none remain (tracked in
+    # asked_criteria). All still-unresolved criteria are sent as one batch
+    # (not one round-trip per question) -- judge_policy already judges every
+    # criterion for this candidate in a single LLM call, so there is no reason
+    # to trickle them out one at a time, and the whole point of batching is
+    # answering everything locally before the next network round-trip instead
+    # of recalculating only after all questions are answered.
     targeted = bool(state.get("target_policy_id"))
 
     if focus_candidate and (targeted or state["rounds"] < _MAX_ROUNDS):
-        evidence = graph_evidence.get(focus_candidate.policy_id)
-        if evidence:
-            judgments = _judge_with_company_facts(company, focus_candidate, evidence, fact_index)
-            for judgment in judgments:
-                key = f"{focus_candidate.policy_id}::{judgment.criterion}"
-                if judgment.status == "정보부족" and key not in state["asked_criteria"]:
-                    question_id = f"q{state['rounds'] + 1}"
-                    question_text = f"다음 사항에 해당하십니까?\n\n{judgment.criterion}"
-                    state["pending_question"] = {
-                        "question_id": question_id,
-                        "policy_id": focus_candidate.policy_id,
-                        "criterion_text": judgment.criterion,
-                        "text": question_text,
-                    }
-                    session.langgraph_state = state
-                    flag_modified(session, "langgraph_state")
-                    session.updated_at = datetime.now(timezone.utc)
-                    _log_message(db, session.session_id, "server", question_text, options=_YES_NO_OPTIONS)
-                    db.commit()
-                    return {
-                        "type": "question",
-                        "question_id": question_id,
-                        "text": question_text,
-                        "options": _YES_NO_OPTIONS,
-                    }
+        pending_questions = _build_pending_questions(
+            db, session, company, focus_candidate, graph_evidence, fact_index
+        )
+        if pending_questions:
+            state["pending_questions"] = pending_questions
+            session.langgraph_state = state
+            flag_modified(session, "langgraph_state")
+            session.updated_at = datetime.now(timezone.utc)
+            for question in pending_questions:
+                _log_message(db, session.session_id, "server", question["text"], options=_YES_NO_OPTIONS)
+            db.commit()
+            return {"type": "question_batch", "questions": _serialize_pending_questions(pending_questions)}
 
-    if candidates:
-        # Same rationale as orchestrator.py::_llm_judge -- one OpenAI call per
-        # candidate, independent and I/O-bound, so run them concurrently.
-        with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
-            futures = [
-                (
-                    candidate,
-                    executor.submit(
-                        _judge_with_company_facts,
-                        company,
-                        candidate,
-                        graph_evidence.get(candidate.policy_id),
-                        fact_index,
-                    ),
-                )
-                for candidate in candidates
-            ]
-            scored = [
-                aggregate_score(candidate.policy_id, candidate.title, future.result())
-                for candidate, future in futures
-            ]
-    else:
-        scored = []
+    scored = _score_candidates(db, session, company, candidates, focus_candidate, graph_evidence, fact_index)
     scored.sort(key=lambda match: match.score, reverse=True)
     save_match_results(db, session.company_id, scored)
 
     state["status"] = "completed"
-    state["pending_question"] = None
+    state["pending_questions"] = []
     session.langgraph_state = state
     flag_modified(session, "langgraph_state")
     session.updated_at = datetime.now(timezone.utc)
@@ -270,9 +437,16 @@ def advance_session(db: Session, session: ChatSession) -> dict:
 
 def _serialize_cached(db: Session, company_id: str) -> list[dict]:
     results = list_match_results(db, company_id)
+    titles = {
+        policy.policy_id: policy.title
+        for policy in db.execute(
+            select(Policy).where(Policy.policy_id.in_([r.policy_id for r in results]))
+        ).scalars()
+    }
     return [
         {
             "policy_id": result.policy_id,
+            "title": titles.get(result.policy_id, result.policy_id),
             "score": result.score,
             "reasons": result.reasons,
             "computed_at": result.computed_at.isoformat(),

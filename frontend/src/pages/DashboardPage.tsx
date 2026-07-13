@@ -7,6 +7,7 @@ interface MatchReason {
   criterion: string
   status: string
   evidence: string | null
+  confirmed: boolean
 }
 
 interface MatchResult {
@@ -36,10 +37,15 @@ function scoreBadgeClass(score: number): string {
   return 'badge-error'
 }
 
-function statusBadgeClass(status: string): string {
-  if (status === '충족') return 'badge-success'
-  if (status === '미충족') return 'badge-error'
+function reasonBadgeClass(reason: MatchReason): string {
+  if (reason.status === '충족') return 'badge-success'
+  if (reason.status === '미충족') return reason.confirmed ? 'badge-error' : 'badge-warning'
   return 'badge-neutral'
+}
+
+function reasonStatusLabel(reason: MatchReason): string {
+  if (reason.status === '미충족' && reason.confirmed) return '미충족 확정'
+  return reason.status
 }
 
 function ProfileCard({ profile }: { profile: CompanyProfile }) {
@@ -159,43 +165,41 @@ export default function DashboardPage() {
         <ul className="flex flex-col gap-3">
           {matches.map((match) => (
             <li key={match.policy_id} className="card overflow-hidden border border-base-300 bg-base-100">
-              <button
-                className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
-                onClick={() => setExpanded(expanded === match.policy_id ? null : match.policy_id)}
-              >
-                <span className="font-medium text-base-content">{match.title}</span>
+              <div className="flex w-full items-center gap-3 px-4 py-3.5">
+                <label className="flex flex-1 cursor-pointer items-center gap-3" title="체크하면 이 정책에 대한 질문 답변 채팅으로 이동합니다">
+                  <input
+                    type="checkbox"
+                    className="checkbox checkbox-primary checkbox-sm shrink-0"
+                    onChange={() =>
+                      navigate(
+                        `/chat?policy_id=${encodeURIComponent(match.policy_id)}&title=${encodeURIComponent(match.title)}`,
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="flex-1 text-left font-medium text-base-content"
+                    onClick={() => setExpanded(expanded === match.policy_id ? null : match.policy_id)}
+                  >
+                    {match.title}
+                  </button>
+                </label>
                 <span className={`badge ${scoreBadgeClass(match.score)} shrink-0 font-semibold`}>
                   {match.score}점
                 </span>
-              </button>
+              </div>
               {expanded === match.policy_id && (
-                <>
-                  <ul className="flex flex-col gap-2.5 border-t border-base-300 px-4 pb-4 pt-3">
-                    {match.reasons.map((reason, i) => (
-                      <li key={i} className="pt-2 text-sm first:pt-0">
-                        <span className={`badge badge-sm ${statusBadgeClass(reason.status)} mr-2`}>
-                          {reason.status}
-                        </span>
-                        <span>{reason.criterion}</span>
-                        {reason.evidence && (
-                          <p className="mt-1 text-xs text-base-content/60">{reason.evidence}</p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="px-4 pb-4">
-                    <button
-                      className="btn btn-outline btn-primary btn-sm"
-                      onClick={() =>
-                        navigate(
-                          `/chat?policy_id=${encodeURIComponent(match.policy_id)}&title=${encodeURIComponent(match.title)}`,
-                        )
-                      }
-                    >
-                      이 정책에 대해 질문 답하고 재계산
-                    </button>
-                  </div>
-                </>
+                <ul className="flex flex-col gap-2.5 border-t border-base-300 px-4 pb-4 pt-3">
+                  {match.reasons.map((reason, i) => (
+                    <li key={i} className="pt-2 text-sm first:pt-0">
+                      <span className={`badge badge-sm ${reasonBadgeClass(reason)} mr-2`}>
+                        {reasonStatusLabel(reason)}
+                      </span>
+                      <span>{reason.criterion}</span>
+                      {reason.evidence && <p className="mt-1 text-xs text-base-content/60">{reason.evidence}</p>}
+                    </li>
+                  ))}
+                </ul>
               )}
             </li>
           ))}

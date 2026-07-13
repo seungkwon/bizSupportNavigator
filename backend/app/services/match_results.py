@@ -5,6 +5,7 @@
 re-running the LLM/graph pipeline.
 """
 
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -25,10 +26,7 @@ def save_match_results(db: Session, company_id: str, scored_matches: list[Scored
     for result in stale:
         db.delete(result)
     for match in scored_matches:
-        reasons_json = [
-            {"criterion": reason.criterion, "status": reason.status, "evidence": reason.evidence}
-            for reason in match.reasons
-        ]
+        reasons_json = [asdict(reason) for reason in match.reasons]
         existing = db.execute(
             select(MatchResult).where(
                 MatchResult.company_id == company_id, MatchResult.policy_id == match.policy_id
