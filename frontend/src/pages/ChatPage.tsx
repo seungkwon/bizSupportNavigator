@@ -24,6 +24,7 @@ interface MatchReason {
   status: string
   evidence: string | null
   confirmed: boolean
+  conflicting: boolean
 }
 
 interface ChatMatch {
@@ -76,12 +77,19 @@ function scoreBadgeClass(score: number): string {
 
 function reasonBadgeClass(reason: MatchReason): string {
   if (reason.status === '충족') return 'badge-success'
-  if (reason.status === '미충족') return reason.confirmed ? 'badge-error' : 'badge-warning'
+  if (reason.status === '미충족') {
+    if (reason.confirmed) return 'badge-error'
+    if (reason.conflicting) return 'badge-info'
+    return 'badge-warning'
+  }
   return 'badge-neutral'
 }
 
 function reasonStatusLabel(reason: MatchReason): string {
-  if (reason.status === '미충족' && reason.confirmed) return '미충족 확정'
+  if (reason.status === '미충족') {
+    if (reason.confirmed) return '미충족 확정'
+    if (reason.conflicting) return '미충족 (답변과 다름)'
+  }
   return reason.status
 }
 

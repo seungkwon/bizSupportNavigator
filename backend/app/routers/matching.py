@@ -52,6 +52,7 @@ class MatchReasonOut(BaseModel):
     status: str
     evidence: str | None
     confirmed: bool = False
+    conflicting: bool = False
 
 
 class MatchResultOut(BaseModel):

@@ -135,14 +135,19 @@ def unresolved_criteria(index: FactIndex | None, criteria_texts: list[str]) -> l
     return [text for text, score in zip(criteria_texts, best_similarity) if score < _SIMILARITY_THRESHOLD]
 
 
-def confirmed_negative_criteria(index: FactIndex | None, criteria_texts: list[str]) -> set[str]:
-    """Which of these criteria have a matching company fact answered '아니오'
-    (embedding similarity, no LLM call) -- used to mark a 미충족 judgment as
-    directly confirmed by the user rather than merely inferred by the LLM from
-    RAG evidence (app/services/chat_service.py, MatchReason.confirmed).
+def best_matching_answer(index: FactIndex | None, criteria_texts: list[str]) -> dict[str, str | None]:
+    """For each criterion, the answer ('예'/'아니오') of the company fact that
+    best matches it (embedding similarity, no LLM call), or None if nothing
+    clears the threshold. Used to tell apart three cases for a 미충족
+    judgment (app/services/chat_service.py):
+      - no matching fact: a plain LLM inference from RAG evidence
+      - matching fact answered '아니오': directly confirmed by the user
+      - matching fact answered '예': the user's answer conflicts with the
+        LLM's judgment (e.g. RAG/demographic evidence overrides a
+        self-reported "yes") -- worth flagging rather than hiding.
     """
     if index is None or not criteria_texts:
-        return set()
+        return dict.fromkeys(criteria_texts)
 
     criteria_vectors = np.array(get_embedder().embed_documents(criteria_texts))
     fact_norms = np.linalg.norm(index.vectors, axis=1, keepdims=True)
@@ -152,7 +157,6 @@ def confirmed_negative_criteria(index: FactIndex | None, criteria_texts: list[st
     best_similarity = similarity.max(axis=0)
 
     return {
-        text
+        text: index.facts[best_fact_idx[i]].answer if best_similarity[i] >= _SIMILARITY_THRESHOLD else None
         for i, text in enumerate(criteria_texts)
-        if best_similarity[i] >= _SIMILARITY_THRESHOLD and index.facts[best_fact_idx[i]].answer == "아니오"
     }

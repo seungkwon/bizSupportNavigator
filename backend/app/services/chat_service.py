@@ -62,7 +62,7 @@ from app.models.match_result import MatchResult
 from app.models.policy import Policy
 from app.services.company_facts import (
     FactIndex,
-    confirmed_negative_criteria,
+    best_matching_answer,
     load_fact_index,
     relevant_facts_for,
     save_fact,
@@ -325,8 +325,8 @@ def _score_candidates(
             # worth a fresh look if the confirming fact was since edited or
             # deleted (app/routers/company_facts.py), which un-confirms it and
             # makes the policy a recalculation candidate again.
-            still_confirmed = confirmed_negative_criteria(fact_index, confirmed_negative)
-            return not set(confirmed_negative) <= still_confirmed
+            answers = best_matching_answer(fact_index, confirmed_negative)
+            return any(answers[c] != "아니오" for c in confirmed_negative)
         return any(reason["status"] in _NEEDS_CONFIRMATION for reason in cached.reasons)
 
     to_rejudge = [c for c in candidates if _needs_rejudge(c)]
@@ -368,20 +368,29 @@ def _score_candidates(
                 )
             )
 
-    # Mark which 미충족 judgments the user directly confirmed (answered "아니오"
-    # to a chat question) rather than the LLM merely inferring it from RAG
-    # evidence -- frontend shows these with a distinct label/color. A
-    # confirmed 미충족 is certain, not a guess averaged in with everything
-    # else, so it caps the score at 0 the same way a confirmed exclusion-match
-    # already does in score_aggregate.aggregate_score.
+    # Mark each 미충족 judgment against any matching company fact:
+    #   - no matching fact: plain LLM inference from RAG evidence, left as-is
+    #   - matching fact answered "아니오": directly confirmed by the user --
+    #     certain, not a guess, so it caps the whole match's score at 0 the
+    #     same way a confirmed exclusion-match already does in
+    #     score_aggregate.aggregate_score
+    #   - matching fact answered "예": the user's own answer conflicts with
+    #     the LLM's judgment (e.g. RAG/demographic evidence overriding a
+    #     self-report) -- flagged rather than silently shown as a plain guess
+    # Frontend shows all three with a distinct label/color.
     negative_criteria = [reason.criterion for match in scored for reason in match.reasons if reason.status == "미충족"]
-    confirmed = confirmed_negative_criteria(fact_index, negative_criteria)
+    answers = best_matching_answer(fact_index, negative_criteria)
     for match in scored:
         match_has_confirmed_negative = False
         for reason in match.reasons:
-            if reason.status == "미충족" and reason.criterion in confirmed:
+            if reason.status != "미충족":
+                continue
+            answer = answers.get(reason.criterion)
+            if answer == "아니오":
                 reason.confirmed = True
                 match_has_confirmed_negative = True
+            elif answer == "예":
+                reason.conflicting = True
         if match_has_confirmed_negative:
             match.score = 0
 

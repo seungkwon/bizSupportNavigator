@@ -34,6 +34,11 @@ class MatchReason:
     # evidence -- app/services/chat_service.py sets this after scoring, since
     # it needs the company's fact history to know. Always False for 충족/정보부족.
     confirmed: bool = False
+    # True when a 미충족 judgment contradicts a company fact answered "예" --
+    # the user reported meeting this criterion, but the LLM judged it not met
+    # anyway (e.g. definitive demographic data outweighing a self-report).
+    # Mutually exclusive with confirmed (a fact's answer is one or the other).
+    conflicting: bool = False
 
 
 @dataclass
