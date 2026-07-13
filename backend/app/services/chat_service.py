@@ -44,6 +44,7 @@ criterion on a different policy in a later session, instead of asking the same
 thing again.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -219,14 +220,29 @@ def advance_session(db: Session, session: ChatSession) -> dict:
                         "options": _YES_NO_OPTIONS,
                     }
 
-    scored = [
-        aggregate_score(
-            candidate.policy_id,
-            candidate.title,
-            _judge_with_company_facts(company, candidate, graph_evidence.get(candidate.policy_id), fact_index),
-        )
-        for candidate in candidates
-    ]
+    if candidates:
+        # Same rationale as orchestrator.py::_llm_judge -- one OpenAI call per
+        # candidate, independent and I/O-bound, so run them concurrently.
+        with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+            futures = [
+                (
+                    candidate,
+                    executor.submit(
+                        _judge_with_company_facts,
+                        company,
+                        candidate,
+                        graph_evidence.get(candidate.policy_id),
+                        fact_index,
+                    ),
+                )
+                for candidate in candidates
+            ]
+            scored = [
+                aggregate_score(candidate.policy_id, candidate.title, future.result())
+                for candidate, future in futures
+            ]
+    else:
+        scored = []
     scored.sort(key=lambda match: match.score, reverse=True)
     save_match_results(db, session.company_id, scored)
 

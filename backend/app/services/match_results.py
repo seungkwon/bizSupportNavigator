@@ -16,6 +16,14 @@ from app.services.score_aggregate import ScoredMatch
 
 def save_match_results(db: Session, company_id: str, scored_matches: list[ScoredMatch]) -> datetime:
     now = datetime.now(timezone.utc)
+    kept_policy_ids = {match.policy_id for match in scored_matches}
+    stale = db.execute(
+        select(MatchResult).where(
+            MatchResult.company_id == company_id, MatchResult.policy_id.not_in(kept_policy_ids)
+        )
+    ).scalars()
+    for result in stale:
+        db.delete(result)
     for match in scored_matches:
         reasons_json = [
             {"criterion": reason.criterion, "status": reason.status, "evidence": reason.evidence}

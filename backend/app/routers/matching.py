@@ -106,7 +106,7 @@ def get_policy_candidates(
 def refresh_matches(
     company_id: str,
     query: str | None = Query(default=None, description="비어 있으면 기업 프로필로 자동 생성"),
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: int = Query(default=5, ge=1, le=50),
     only_open: bool = Query(default=True),
     db: Session = Depends(get_db),
     _: str = Depends(require_company_scope),

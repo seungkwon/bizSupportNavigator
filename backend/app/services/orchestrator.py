@@ -13,6 +13,7 @@ Two compiled graphs are exposed: `run_policy_matching` (meta_filter -> rag_searc
 pipeline and backs `/matches` and `/matches/refresh`.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -93,12 +94,21 @@ class MatchState(CandidateState):
 
 
 def _llm_judge(state: MatchState) -> dict:
-    judgments_by_policy = {
-        candidate.policy_id: judge_policy(
-            state["company"], candidate, state["graph_evidence"].get(candidate.policy_id)
-        )
-        for candidate in state["candidates"]
-    }
+    candidates = state["candidates"]
+    if not candidates:
+        return {"judgments_by_policy": {}}
+    # judge_policy is one OpenAI HTTP call per candidate -- these are
+    # independent and I/O-bound, so running them concurrently cuts wall time
+    # from sum(calls) to roughly the slowest single call instead of doing
+    # them one at a time.
+    with ThreadPoolExecutor(max_workers=len(candidates)) as executor:
+        futures = {
+            candidate.policy_id: executor.submit(
+                judge_policy, state["company"], candidate, state["graph_evidence"].get(candidate.policy_id)
+            )
+            for candidate in candidates
+        }
+        judgments_by_policy = {policy_id: future.result() for policy_id, future in futures.items()}
     return {"judgments_by_policy": judgments_by_policy}
 
 

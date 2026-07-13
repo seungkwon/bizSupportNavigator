@@ -1,7 +1,7 @@
 """Milestone 7 chat WebSocket (detailed_plan.md 5/8): `/ws/chat/{session_id}`.
 
 Protocol (detailed_plan.md 5):
-  client -> server: {"type": "start", "company_id": "...", "query": "..."?, "limit": 10?, "only_open": true?, "policy_id": "..."?}
+  client -> server: {"type": "start", "company_id": "...", "query": "..."?, "limit": 5?, "only_open": true?, "policy_id": "..."?}
   # "policy_id" (dashboard "이 정책 재확인" flow): when set, clarification questions
   # focus on that specific policy instead of the RAG top rank (see
   # app/services/chat_service.py::_resolve_focus_candidate), so a policy the user
@@ -54,7 +54,7 @@ async def _handle_start(db: DbSession, session_id: str, data: dict, authenticate
         session_id,
         company_id=authenticated_company_id,
         query_text=data.get("query"),
-        limit=data.get("limit", 10),
+        limit=data.get("limit", 5),
         only_open=data.get("only_open", True),
         target_policy_id=data.get("policy_id"),
     )
