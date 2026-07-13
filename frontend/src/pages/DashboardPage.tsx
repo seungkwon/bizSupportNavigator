@@ -140,9 +140,15 @@ export default function DashboardPage() {
       <div className="mb-6 flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold text-base-content">매칭 대시보드</h1>
         <button className="btn btn-primary btn-sm" onClick={handleRefresh} disabled={refreshing}>
-          {refreshing ? '재계산 중... (수십 초 소요될 수 있음)' : '다시 계산'}
+          {refreshing && <span className="loading loading-spinner loading-xs" />}
+          {refreshing ? '재계산 중...' : '다시 계산'}
         </button>
       </div>
+      {refreshing && (
+        <div className="mb-6 h-1.5 w-full overflow-hidden rounded-full bg-base-300">
+          <div className="indeterminate-bar h-full w-1/3 rounded-full bg-primary" />
+        </div>
+      )}
       {profile && <ProfileCard profile={profile} />}
       {error && <p className="mb-4 text-sm text-error">{error}</p>}
       {loading ? (
