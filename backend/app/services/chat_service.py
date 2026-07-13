@@ -287,18 +287,16 @@ def _score_candidates(
     session: ChatSession,
     company: CompanyDemographics,
     candidates: list[PolicyCandidate],
-    focus_candidate: PolicyCandidate | None,
     graph_evidence: dict[str, PolicyGraphEvidence],
     fact_index: FactIndex | None,
 ) -> list[ScoredMatch]:
     """Re-judges only candidates that could plausibly have changed. A
     candidate whose cached score already has every criterion resolved (no
-    정보부족/미충족 left) cannot change from anything just answered -- 충족 is
-    final, and there's no unresolved item for a new fact to affect -- so
-    re-judging it would spend an OpenAI call to reproduce the same result.
-    Only the focus candidate (this round's answers are about it) and
-    candidates with something still open are re-judged; everything else
-    reuses its cached score/reasons.
+    정보부족/미충족 left, or a 미충족 that's confirmed and still backed by a
+    fact) cannot change from anything just answered -- so re-judging it would
+    spend an OpenAI call to reproduce the same result. Everything else
+    (including the focus candidate, whenever it still has something open) is
+    re-judged; settled candidates reuse their cached score/reasons.
     """
     if not candidates:
         return []
@@ -314,11 +312,21 @@ def _score_candidates(
     }
 
     def _needs_rejudge(candidate: PolicyCandidate) -> bool:
-        if focus_candidate is not None and candidate.policy_id == focus_candidate.policy_id:
-            return True
         cached = cached_by_policy.get(candidate.policy_id)
         if cached is None:
             return True
+        confirmed_negative = [
+            reason["criterion"]
+            for reason in cached.reasons
+            if reason["status"] == "미충족" and reason.get("confirmed")
+        ]
+        if confirmed_negative:
+            # A confirmed 미충족 settles the policy as inapplicable -- only
+            # worth a fresh look if the confirming fact was since edited or
+            # deleted (app/routers/company_facts.py), which un-confirms it and
+            # makes the policy a recalculation candidate again.
+            still_confirmed = confirmed_negative_criteria(fact_index, confirmed_negative)
+            return not set(confirmed_negative) <= still_confirmed
         return any(reason["status"] in _NEEDS_CONFIRMATION for reason in cached.reasons)
 
     to_rejudge = [c for c in candidates if _needs_rejudge(c)]
@@ -362,13 +370,20 @@ def _score_candidates(
 
     # Mark which 미충족 judgments the user directly confirmed (answered "아니오"
     # to a chat question) rather than the LLM merely inferring it from RAG
-    # evidence -- frontend shows these with a distinct label/color.
+    # evidence -- frontend shows these with a distinct label/color. A
+    # confirmed 미충족 is certain, not a guess averaged in with everything
+    # else, so it caps the score at 0 the same way a confirmed exclusion-match
+    # already does in score_aggregate.aggregate_score.
     negative_criteria = [reason.criterion for match in scored for reason in match.reasons if reason.status == "미충족"]
     confirmed = confirmed_negative_criteria(fact_index, negative_criteria)
     for match in scored:
+        match_has_confirmed_negative = False
         for reason in match.reasons:
             if reason.status == "미충족" and reason.criterion in confirmed:
                 reason.confirmed = True
+                match_has_confirmed_negative = True
+        if match_has_confirmed_negative:
+            match.score = 0
 
     return scored
 
@@ -409,7 +424,7 @@ def advance_session(db: Session, session: ChatSession) -> dict:
             db.commit()
             return {"type": "question_batch", "questions": _serialize_pending_questions(pending_questions)}
 
-    scored = _score_candidates(db, session, company, candidates, focus_candidate, graph_evidence, fact_index)
+    scored = _score_candidates(db, session, company, candidates, graph_evidence, fact_index)
     scored.sort(key=lambda match: match.score, reverse=True)
     save_match_results(db, session.company_id, scored)
 
