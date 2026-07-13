@@ -102,6 +102,7 @@ export default function ChatPage() {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [questions, setQuestions] = useState<QuestionItem[] | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [answeredHistory, setAnsweredHistory] = useState<{ text: string; answerLabel: string }[]>([])
   const [waitingPhase, setWaitingPhase] = useState<'checking' | 'recalculating'>('checking')
   const [result, setResult] = useState<ChatMatch[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -172,6 +173,7 @@ export default function ChatPage() {
     startedRef.current = false
     setQuestions(null)
     setAnswers({})
+    setAnsweredHistory([])
     setWaitingPhase('checking')
     setResult(null)
     setError(null)
@@ -192,6 +194,11 @@ export default function ChatPage() {
   function submitAnswers() {
     if (!questions || wsRef.current?.readyState !== WebSocket.OPEN) return
     const payload = questions.map((q) => ({ question_id: q.question_id, value: answers[q.question_id] }))
+    const historyEntries = questions.map((q) => ({
+      text: q.text,
+      answerLabel: q.options.find((opt) => opt.value === answers[q.question_id])?.label ?? answers[q.question_id],
+    }))
+    setAnsweredHistory((prev) => [...prev, ...historyEntries])
     wsRef.current.send(JSON.stringify({ type: 'answer_batch', answers: payload }))
     setQuestions(null)
     setAnswers({})
@@ -206,6 +213,7 @@ export default function ChatPage() {
     startedRef.current = false
     setQuestions(null)
     setAnswers({})
+    setAnsweredHistory([])
     setWaitingPhase('checking')
     setResult(null)
     setError(null)
@@ -222,10 +230,24 @@ export default function ChatPage() {
       )}
       <p className="mb-4 text-xs text-base-content/60">연결 상태: {statusLabel(status)}</p>
       {error && <p className="mb-4 text-sm text-error">{error}</p>}
+      {!result && answeredHistory.length > 0 && (
+        <div className="mb-4 flex flex-col gap-2">
+          {answeredHistory.map((h, i) => (
+            <div key={i} className="card border border-base-300 bg-base-100 opacity-70">
+              <div className="card-body gap-2 py-3">
+                <p className="whitespace-pre-line text-sm text-base-content">{h.text}</p>
+                <span className="badge badge-neutral badge-sm w-fit">답변: {h.answerLabel}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {questions && questions.length > 0 && (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-base-content/70">
-            아래 {questions.length}개 질문에 모두 답한 뒤 제출해주세요.
+            {answeredHistory.length > 0
+              ? `추가로 확인이 필요한 질문 ${questions.length}개에 답한 뒤 제출해주세요.`
+              : `아래 ${questions.length}개 질문에 모두 답한 뒤 제출해주세요.`}
           </p>
           {questions.map((q) => (
             <div key={q.question_id} className="card border border-base-300 bg-base-100">
