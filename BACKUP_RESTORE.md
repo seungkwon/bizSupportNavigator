@@ -34,11 +34,14 @@ docker compose start
 
 ## 복원하기
 
-새 머신에서, **`docker compose up -d`를 실행하기 전에** 아래 순서로 진행한다.
+> **주의**: "`docker compose up -d`를 실행하기 전에 복원한다"는 것은 **서비스 컨테이너(postgres/chroma/neo4j)를 아직 띄우지 말라**는 뜻이지, Docker 자체를 꺼둬도 된다는 뜻이 아니다. 복원 스크립트는 `docker volume create`/`docker run`을 직접 호출하므로 **Docker Desktop(엔진/데몬)은 반드시 실행 중이어야 한다.** 데몬이 꺼져 있으면 스크립트가 `failed to connect to the docker API ...` 에러로 즉시 실패한다 — Docker Desktop을 먼저 켜고 `docker info`가 정상 응답하는지 확인한 뒤 진행할 것.
+
+새 머신에서 아래 순서로 진행한다.
 
 1. 저장소를 clone하고 `.env.example`을 `.env`로 복사한 뒤 실제 값(`OPENAI_API_KEY`, `BIZINFO_API_KEY`, `JWT_SECRET`, DB 비밀번호 등)을 채워 넣는다. 비밀값은 git으로 옮겨지지 않으므로 별도의 안전한 경로로 가져와야 한다.
 2. 원본 머신에서 만든 `volumes/backup/*.tar.gz`를 새 머신의 저장소 루트 아래 같은 경로(`volumes/backup/`)에 둔다.
-3. 복원 스크립트를 실행한다.
+3. **Docker Desktop을 실행하고** `docker info`(또는 `docker version`)가 에러 없이 응답하는지 확인한다. 아직 `docker compose up -d`는 실행하지 않는다 — 컨테이너가 뜬 상태에서 볼륨을 지우고 다시 채우면 해당 서비스가 옛 데이터를 붙잡고 있을 수 있으므로, 복원은 컨테이너를 띄우기 전에 한다.
+4. 복원 스크립트를 실행한다.
 
    ```bash
    bash scripts/restore-volumes.sh
@@ -47,7 +50,7 @@ docker compose start
    - 대상 볼륨이 없으면 자동으로 생성한다(`docker volume create`).
    - 각 볼륨의 기존 데이터를 삭제(`rm -rf /data/*`)하고 tar.gz 내용으로 덮어쓴다.
    - 대응하는 `volumes/backup/<name>.tar.gz` 파일이 없는 볼륨은 건너뛴다(스킵 메시지 출력).
-4. 컨테이너를 기동한다.
+5. 컨테이너를 기동한다.
 
    ```bash
    docker compose up -d
