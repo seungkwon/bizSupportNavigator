@@ -4,6 +4,22 @@
 
 배경/결정 이력의 단일 소스는 [detailed_plan.md](detailed_plan.md)이며, 다른 컴퓨터로 데이터를 옮길 때는 [BACKUP_RESTORE.md](BACKUP_RESTORE.md)를 참고한다.
 
+## 가장 빠른 방법: `scripts/dev-up.sh`
+
+이미 `.env`/venv/`node_modules`가 한 번이라도 준비된 상태라면(최초 구동을 이미 마쳤다면), 아래 한 줄로 인프라+백엔드+프론트엔드를 모두 띄우고 헬스체크까지 확인할 수 있다.
+
+```bash
+bash scripts/dev-up.sh
+```
+
+- Docker 데몬이 꺼져 있으면 안내 메시지를 내고 종료(Docker Desktop을 먼저 켤 것).
+- `.env`가 없으면 `.env.example`에서 자동 생성.
+- `docker compose up -d` → postgres healthcheck 대기 → 백엔드/프론트엔드가 이미 떠 있지 않으면 백그라운드로 기동(로그는 `logs/backend.log`, `logs/frontend.log`).
+- 이미 8000/5173 포트가 응답 중이면 해당 서비스는 건너뛴다 — 여러 번 실행해도 안전.
+- 종료는 `bash scripts/dev-down.sh` (백엔드/프론트엔드 프로세스 정지 + `docker compose stop`, 볼륨 데이터는 보존).
+
+아래 절차는 최초 구동(사전 설치 포함)과 트러블슈팅을 위한 상세 내용이다.
+
 ## 구성 요소
 
 | 구성 요소 | 역할 | 기본 포트 |

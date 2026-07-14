@@ -22,6 +22,7 @@ build/
 data/
 volumes/
 backup/
+logs/
 
 # OS / editor
 .DS_Store
